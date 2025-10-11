@@ -1,0 +1,61 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Clock Widget Settings",
+  "description": "Configuration for the clock widget",
+  "type": "object",
+  "properties": {
+    "timezone": {
+      "type": "string",
+      "title": "Timezone",
+      "description": "Timezone to display",
+      "enum": ["UTC", "America/New_York", "America/Los_Angeles", "Europe/London", "Asia/Tokyo", "Local"],
+      "default": "Local"
+    },
+    "format_24h": {
+      "type": "boolean",
+      "title": "24-Hour Format",
+      "description": "Use 24-hour time format",
+      "default": false
+    },
+    "show_seconds": {
+      "type": "boolean",
+      "title": "Show Seconds",
+      "description": "Display seconds in the time",
+      "default": true
+    },
+    "show_date": {
+      "type": "boolean",
+      "title": "Show Date",
+      "description": "Display the current date",
+      "default": true
+    },
+    "date_format": {
+      "type": "string",
+      "title": "Date Format",
+      "description": "Format for displaying the date",
+      "enum": ["MM/DD/YYYY", "DD/MM/YYYY", "YYYY-MM-DD"],
+      "default": "MM/DD/YYYY"
+    },
+    "font_size": {
+      "type": "integer",
+      "title": "Font Size",
+      "description": "Size of the clock text",
+      "minimum": 12,
+      "maximum": 72,
+      "default": 24
+    },
+    "text_color": {
+      "type": "string",
+      "title": "Text Color",
+      "description": "Color of the clock text",
+      "default": "#000000"
+    },
+    "background_color": {
+      "type": "string",
+      "title": "Background Color",
+      "description": "Background color of the widget",
+      "default": "#FFFFFF"
+    }
+  },
+  "required": ["timezone", "format_24h"]
+}

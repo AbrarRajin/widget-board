@@ -1,0 +1,53 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Example Widget Settings",
+  "description": "Configuration options for the example widget",
+  "type": "object",
+  "properties": {
+    "title": {
+      "type": "string",
+      "title": "Widget Title",
+      "description": "Display title for the widget",
+      "default": "My Widget",
+      "maxLength": 50
+    },
+    "refresh_interval": {
+      "type": "integer",
+      "title": "Refresh Interval (seconds)",
+      "description": "How often to update the widget data",
+      "default": 60,
+      "minimum": 5,
+      "maximum": 3600
+    },
+    "show_border": {
+      "type": "boolean",
+      "title": "Show Border",
+      "description": "Display a border around the widget",
+      "default": true
+    },
+    "theme": {
+      "type": "string",
+      "title": "Theme",
+      "description": "Color theme for the widget",
+      "enum": ["light", "dark", "auto"],
+      "default": "auto"
+    },
+    "font_size": {
+      "type": "number",
+      "title": "Font Size (pt)",
+      "description": "Size of the widget text",
+      "default": 12.0,
+      "minimum": 8.0,
+      "maximum": 24.0,
+      "multipleOf": 0.5
+    },
+    "description": {
+      "type": "string",
+      "title": "Description",
+      "description": "Optional description text",
+      "format": "textarea",
+      "default": ""
+    }
+  },
+  "required": ["title", "refresh_interval"]
+}

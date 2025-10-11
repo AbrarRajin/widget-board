@@ -1,0 +1,5 @@
+PySide6>=6.6.0
+pyzmq>=25.1.0
+jsonschema>=4.20.0
+platformdirs>=4.0.0
+apsw>=3.44.0.0

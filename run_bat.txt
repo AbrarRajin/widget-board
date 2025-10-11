@@ -1,0 +1,34 @@
+@echo off
+REM Development run script for WidgetBoard (Windows)
+
+echo WidgetBoard Development Runner
+echo ================================
+
+REM Check if virtual environment exists
+if not exist "venv" (
+    echo Creating virtual environment...
+    python -m venv venv
+)
+
+REM Activate virtual environment
+echo Activating virtual environment...
+call venv\Scripts\activate.bat
+
+REM Install/update dependencies
+echo Installing dependencies...
+pip install -q --upgrade pip
+pip install -q -r requirements.txt
+
+REM Run tests if requested
+if "%1"=="test" (
+    echo Running tests...
+    python -m unittest discover tests
+    goto :end
+)
+
+REM Run application
+echo Starting WidgetBoard...
+python -m app.main
+
+:end
+deactivate
