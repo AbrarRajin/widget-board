@@ -1,0 +1,18 @@
+{
+  "plugin_id": "links_widget",
+  "name": "Quick Links",
+  "version": "1.0.0",
+  "description": "Display a list of clickable links",
+  "author": "WidgetBoard Team",
+  "module_path": "examples.links_widget",
+  "class_name": "LinksPlugin",
+  "schema_path": "../../schema/links_widget_settings.json",
+  "size_constraints": {
+    "min_width": 2,
+    "min_height": 2,
+    "max_width": 4,
+    "max_height": 6,
+    "default_width": 2,
+    "default_height": 3
+  }
+}

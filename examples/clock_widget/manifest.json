@@ -1,0 +1,18 @@
+{
+  "plugin_id": "clock_widget",
+  "name": "Clock",
+  "version": "1.0.0",
+  "description": "Display current time and date",
+  "author": "WidgetBoard Team",
+  "module_path": "examples.clock_widget",
+  "class_name": "ClockPlugin",
+  "schema_path": "../../schema/clock_widget_settings.json",
+  "size_constraints": {
+    "min_width": 2,
+    "min_height": 1,
+    "max_width": 4,
+    "max_height": 3,
+    "default_width": 2,
+    "default_height": 2
+  }
+}
