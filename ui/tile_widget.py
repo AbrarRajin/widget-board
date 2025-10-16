@@ -1,40 +1,49 @@
-"""Visual widget for displaying tiles."""
+"""Visual widget for displaying tiles with plugin support."""
 
 import logging
-from PySide6.QtWidgets import QWidget, QLabel, QVBoxLayout, QMenu
+from typing import Optional
+from PySide6.QtWidgets import QWidget, QLabel, QVBoxLayout
 from PySide6.QtCore import Qt, Signal, QRect, QPoint
-from PySide6.QtGui import QPainter, QColor, QPen, QFont, QAction
+from PySide6.QtGui import QPainter, QColor, QPen, QFont
 
 from core.models import Tile
+from core.plugin_api import PluginBase
 
 logger = logging.getLogger(__name__)
 
 
 class TileWidget(QWidget):
-    """Visual representation of a grid tile."""
+    """Visual representation of a grid tile with plugin rendering support."""
     
     # Signals
     move_requested = Signal(int, int)  # row, col
     resize_requested = Signal(int, int)  # width, height
     remove_requested = Signal()
-    settings_requested = Signal()  # New signal for settings
     
     # Visual constants
     RESIZE_HANDLE_SIZE = 12
     BORDER_WIDTH = 2
     
-    def __init__(self, tile: Tile, cell_size: int, parent=None) -> None:
+    def __init__(
+        self,
+        tile: Tile,
+        cell_size: int,
+        parent: Optional[QWidget] = None,
+        plugin: Optional[PluginBase] = None
+    ) -> None:
         """Initialize tile widget.
         
         Args:
             tile: The tile data model.
             cell_size: Size of one grid cell in pixels.
             parent: Parent widget.
+            plugin: Optional plugin instance to render in the tile.
         """
         super().__init__(parent)
         
         self.tile = tile
         self.cell_size = cell_size
+        self.plugin = plugin
         self.is_edit_mode = False
         self.is_dragging = False
         self.is_resizing = False
@@ -53,6 +62,32 @@ class TileWidget(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
         
+        # Check if we have a plugin to render
+        if self.plugin:
+            try:
+                # Get the plugin's widget and add it to our layout
+                plugin_widget = self.plugin.get_widget()
+                layout.addWidget(plugin_widget, 1)  # Stretch factor 1
+            except Exception as e:
+                logger.error(f"Error getting widget from plugin: {e}")
+                # Show error message in tile
+                error_label = QLabel(f"Plugin Error:\n{str(e)}")
+                error_label.setStyleSheet("color: red;")
+                error_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                layout.addWidget(error_label)
+        else:
+            # No plugin - show placeholder content
+            self._create_placeholder_content(layout)
+        
+        # Apply initial style
+        self._update_style()
+    
+    def _create_placeholder_content(self, layout: QVBoxLayout) -> None:
+        """Create placeholder content when no plugin is available.
+        
+        Args:
+            layout: The layout to add content to.
+        """
         # Title label
         self.title_label = QLabel(self.tile.plugin_id)
         self.title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -70,9 +105,41 @@ class TileWidget(QWidget):
         layout.addWidget(self.title_label)
         layout.addWidget(self.info_label)
         layout.addStretch()
+    
+    def set_plugin(self, plugin: Optional[PluginBase]) -> None:
+        """Set or update the plugin for this tile.
         
-        # Apply initial style
-        self._update_style()
+        Args:
+            plugin: New plugin instance, or None to clear.
+        """
+        # Stop old plugin if exists
+        if self.plugin:
+            try:
+                self.plugin.stop()
+            except Exception as e:
+                logger.error(f"Error stopping old plugin: {e}")
+        
+        self.plugin = plugin
+        
+        # Rebuild UI
+        self._clear_layout()
+        self._setup_ui()
+        
+        # Start new plugin if exists
+        if self.plugin:
+            try:
+                self.plugin.start()
+            except Exception as e:
+                logger.error(f"Error starting new plugin: {e}")
+    
+    def _clear_layout(self) -> None:
+        """Clear all widgets from the layout."""
+        layout = self.layout()
+        if layout:
+            while layout.count():
+                item = layout.takeAt(0)
+                if item.widget():
+                    item.widget().deleteLater()
     
     def set_edit_mode(self, enabled: bool) -> None:
         """Enable or disable edit mode.
@@ -89,235 +156,155 @@ class TileWidget(QWidget):
         """Update widget geometry based on tile position and size."""
         x = self.tile.col * self.cell_size
         y = self.tile.row * self.cell_size
-        width = self.tile.width * self.cell_size
-        height = self.tile.height * self.cell_size
+        w = self.tile.width * self.cell_size
+        h = self.tile.height * self.cell_size
         
-        self.setGeometry(x, y, width, height)
-        self.info_label.setText(f"{self.tile.width}×{self.tile.height}")
+        self.setGeometry(x, y, w, h)
     
     def _update_style(self) -> None:
-        """Update widget styling based on state."""
+        """Update widget styling based on current state."""
         if self.is_edit_mode:
-            bg_color = "#E3F2FD"
-            border_color = "#2196F3"
+            # Edit mode: blue tinted background
+            self.setStyleSheet("""
+                TileWidget {
+                    background-color: rgba(33, 150, 243, 0.1);
+                    border: 2px solid #2196F3;
+                    border-radius: 4px;
+                }
+            """)
         else:
-            bg_color = "#FAFAFA"
-            border_color = "#E0E0E0"
-        
-        self.setStyleSheet(f"""
-            TileWidget {{
-                background-color: {bg_color};
-                border: {self.BORDER_WIDTH}px solid {border_color};
-                border-radius: 4px;
-            }}
-            TileWidget:hover {{
-                border-color: #1976D2;
-            }}
-        """)
+            # View mode: white/dark background
+            self.setStyleSheet("""
+                TileWidget {
+                    background-color: white;
+                    border: 1px solid #ddd;
+                    border-radius: 4px;
+                }
+            """)
     
     def paintEvent(self, event) -> None:
-        """Custom paint to draw resize handle in edit mode.
-        
-        Args:
-            event: Paint event.
-        """
+        """Paint the widget."""
         super().paintEvent(event)
         
+        # Draw resize handle in edit mode
         if self.is_edit_mode:
             painter = QPainter(self)
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
             
             # Draw resize handle in bottom-right corner
             handle_rect = self._get_resize_handle_rect()
+            painter.fillRect(handle_rect, QColor(33, 150, 243))
             
-            # Fill
-            painter.fillRect(handle_rect, QColor("#2196F3"))
-            
-            # Border
-            pen = QPen(QColor("#1976D2"))
-            pen.setWidth(1)
-            painter.setPen(pen)
-            painter.drawRect(handle_rect)
+            painter.end()
     
     def _get_resize_handle_rect(self) -> QRect:
-        """Get the resize handle rectangle.
+        """Get the rectangle for the resize handle.
         
         Returns:
             QRect for the resize handle.
         """
-        return QRect(
-            self.width() - self.RESIZE_HANDLE_SIZE - 2,
-            self.height() - self.RESIZE_HANDLE_SIZE - 2,
-            self.RESIZE_HANDLE_SIZE,
-            self.RESIZE_HANDLE_SIZE
-        )
-    
-    def _is_in_resize_handle(self, pos: QPoint) -> bool:
-        """Check if a position is within the resize handle.
-        
-        Args:
-            pos: Position to check.
-        
-        Returns:
-            True if position is in resize handle.
-        """
-        if not self.is_edit_mode:
-            return False
-        
-        return self._get_resize_handle_rect().contains(pos)
+        size = self.RESIZE_HANDLE_SIZE
+        x = self.width() - size
+        y = self.height() - size
+        return QRect(x, y, size, size)
     
     def mousePressEvent(self, event) -> None:
-        """Handle mouse press for drag/resize.
-        
-        Args:
-            event: Mouse event.
-        """
+        """Handle mouse press."""
         if not self.is_edit_mode:
             return
         
         if event.button() == Qt.MouseButton.LeftButton:
-            if self._is_in_resize_handle(event.pos()):
+            # Check if clicking resize handle
+            if self._get_resize_handle_rect().contains(event.pos()):
                 self.is_resizing = True
                 self.setCursor(Qt.CursorShape.SizeFDiagCursor)
             else:
                 self.is_dragging = True
-                self.drag_start_pos = event.globalPosition().toPoint()
+                self.drag_start_pos = event.pos()
                 self.setCursor(Qt.CursorShape.ClosedHandCursor)
     
     def mouseMoveEvent(self, event) -> None:
-        """Handle mouse move for drag/resize.
-        
-        Args:
-            event: Mouse event.
-        """
+        """Handle mouse move."""
         if not self.is_edit_mode:
             return
         
-        # Update cursor based on hover
+        # Update cursor based on position
         if not self.is_dragging and not self.is_resizing:
-            if self._is_in_resize_handle(event.pos()):
+            if self._get_resize_handle_rect().contains(event.pos()):
                 self.setCursor(Qt.CursorShape.SizeFDiagCursor)
             else:
                 self.setCursor(Qt.CursorShape.OpenHandCursor)
     
     def mouseReleaseEvent(self, event) -> None:
-        """Handle mouse release to end drag/resize.
-        
-        Args:
-            event: Mouse event.
-        """
-        if not self.is_edit_mode:
-            return
-        
+        """Handle mouse release."""
         if event.button() == Qt.MouseButton.LeftButton:
             if self.is_dragging:
-                # Calculate new grid position
-                delta = event.globalPosition().toPoint() - self.drag_start_pos
-                new_x = self.x() + delta.x()
-                new_y = self.y() + delta.y()
+                # Calculate new position
+                delta = event.pos() - self.drag_start_pos
+                new_row = self.tile.row + round(delta.y() / self.cell_size)
+                new_col = self.tile.col + round(delta.x() / self.cell_size)
                 
-                new_row = round(new_y / self.cell_size)
-                new_col = round(new_x / self.cell_size)
-                
+                # Emit move request
                 self.move_requested.emit(new_row, new_col)
+                
+                self.is_dragging = False
+                self.setCursor(Qt.CursorShape.OpenHandCursor)
             
             elif self.is_resizing:
-                # Calculate new size based on mouse position
-                new_width = max(1, round(event.pos().x() / self.cell_size))
-                new_height = max(1, round(event.pos().y() / self.cell_size))
+                # Calculate new size
+                new_width = max(1, round(event.x() / self.cell_size))
+                new_height = max(1, round(event.y() / self.cell_size))
                 
+                # Emit resize request
                 self.resize_requested.emit(new_width, new_height)
-            
-            self.is_dragging = False
-            self.is_resizing = False
-            self.setCursor(Qt.CursorShape.OpenHandCursor)
+                
+                self.is_resizing = False
+                self.setCursor(Qt.CursorShape.OpenHandCursor)
     
     def keyPressEvent(self, event) -> None:
-        """Handle keyboard input for moving/resizing.
-        
-        Args:
-            event: Key event.
-        """
+        """Handle key press events."""
         if not self.is_edit_mode:
             return
         
-        key = event.key()
-        modifiers = event.modifiers()
+        # Arrow keys for moving
+        if event.key() == Qt.Key.Key_Up:
+            self.move_requested.emit(self.tile.row - 1, self.tile.col)
+        elif event.key() == Qt.Key.Key_Down:
+            self.move_requested.emit(self.tile.row + 1, self.tile.col)
+        elif event.key() == Qt.Key.Key_Left:
+            self.move_requested.emit(self.tile.row, self.tile.col - 1)
+        elif event.key() == Qt.Key.Key_Right:
+            self.move_requested.emit(self.tile.row, self.tile.col + 1)
         
-        # Arrow keys to move
-        if modifiers == Qt.KeyboardModifier.NoModifier:
-            if key == Qt.Key.Key_Up:
-                self.move_requested.emit(self.tile.row - 1, self.tile.col)
-            elif key == Qt.Key.Key_Down:
-                self.move_requested.emit(self.tile.row + 1, self.tile.col)
-            elif key == Qt.Key.Key_Left:
-                self.move_requested.emit(self.tile.row, self.tile.col - 1)
-            elif key == Qt.Key.Key_Right:
-                self.move_requested.emit(self.tile.row, self.tile.col + 1)
-        
-        # Shift+Arrow to resize
-        elif modifiers == Qt.KeyboardModifier.ShiftModifier:
-            if key == Qt.Key.Key_Up:
+        # Shift+Arrow keys for resizing
+        elif event.modifiers() == Qt.KeyboardModifier.ShiftModifier:
+            if event.key() == Qt.Key.Key_Up:
                 self.resize_requested.emit(self.tile.width, self.tile.height - 1)
-            elif key == Qt.Key.Key_Down:
+            elif event.key() == Qt.Key.Key_Down:
                 self.resize_requested.emit(self.tile.width, self.tile.height + 1)
-            elif key == Qt.Key.Key_Left:
+            elif event.key() == Qt.Key.Key_Left:
                 self.resize_requested.emit(self.tile.width - 1, self.tile.height)
-            elif key == Qt.Key.Key_Right:
+            elif event.key() == Qt.Key.Key_Right:
                 self.resize_requested.emit(self.tile.width + 1, self.tile.height)
         
-        # Delete key to remove
-        elif key == Qt.Key.Key_Delete:
+        # Delete key for removing
+        elif event.key() == Qt.Key.Key_Delete:
             self.remove_requested.emit()
     
-    def contextMenuEvent(self, event) -> None:
-        """Show context menu on right-click.
-        
-        Args:
-            event: Context menu event.
-        """
-        if not self.is_edit_mode:
-            return
-        
-        menu = QMenu(self)
-        
-        # Settings action
-        settings_action = QAction("Settings...", self)
-        settings_action.triggered.connect(self.settings_requested.emit)
-        menu.addAction(settings_action)
-        
-        menu.addSeparator()
-        
-        # Move to actions
-        move_menu = menu.addMenu("Move to...")
-        
-        move_top_left = QAction("Top Left", self)
-        move_top_left.triggered.connect(lambda: self.move_requested.emit(0, 0))
-        move_menu.addAction(move_top_left)
-        
-        move_top_right = QAction("Top Right", self)
-        move_top_right.triggered.connect(
-            lambda: self.move_requested.emit(0, 8 - self.tile.width)
-        )
-        move_menu.addAction(move_top_right)
-        
-        move_bottom_left = QAction("Bottom Left", self)
-        move_bottom_left.triggered.connect(
-            lambda: self.move_requested.emit(8 - self.tile.height, 0)
-        )
-        move_menu.addAction(move_bottom_left)
-        
-        move_bottom_right = QAction("Bottom Right", self)
-        move_bottom_right.triggered.connect(
-            lambda: self.move_requested.emit(8 - self.tile.height, 8 - self.tile.width)
-        )
-        move_menu.addAction(move_bottom_right)
-        
-        menu.addSeparator()
-        
-        # Remove action
-        remove_action = QAction("Remove", self)
-        remove_action.triggered.connect(self.remove_requested.emit)
-        menu.addAction(remove_action)
-        
-        menu.exec(event.globalPos())
+    def focusInEvent(self, event) -> None:
+        """Handle focus in event."""
+        super().focusInEvent(event)
+        if self.is_edit_mode:
+            # Highlight when focused
+            self.setStyleSheet("""
+                TileWidget {
+                    background-color: rgba(33, 150, 243, 0.2);
+                    border: 2px solid #1976D2;
+                    border-radius: 4px;
+                }
+            """)
+    
+    def focusOutEvent(self, event) -> None:
+        """Handle focus out event."""
+        super().focusOutEvent(event)
+        self._update_style()

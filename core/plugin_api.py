@@ -3,7 +3,6 @@
 This module defines the contract between the host application and plugins.
 """
 
-from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional
 from enum import Enum
 from PySide6.QtWidgets import QWidget
@@ -20,10 +19,10 @@ class PluginState(Enum):
     ERROR = "error"
 
 
-class PluginBase(ABC, QObject):
+class PluginBase(QObject):
     """Base class for all plugins.
     
-    Plugins must inherit from this class and implement the abstract methods.
+    Plugins must inherit from this class and implement the required methods.
     The host application manages the plugin lifecycle through these methods.
     
     Lifecycle:
@@ -71,9 +70,10 @@ class PluginBase(ABC, QObject):
         """Get current plugin settings."""
         return self._settings.copy()
     
-    @abstractmethod
     def get_widget(self) -> QWidget:
         """Get the Qt widget to display in the tile.
+        
+        This method MUST be implemented by subclasses.
         
         This method is called once when the tile is created. The returned
         widget will be placed inside the tile and should update itself
@@ -81,8 +81,11 @@ class PluginBase(ABC, QObject):
         
         Returns:
             QWidget: The widget to display in the tile.
+        
+        Raises:
+            NotImplementedError: If the subclass doesn't implement this method.
         """
-        pass
+        raise NotImplementedError("Plugins must implement get_widget()")
     
     def initialize(self, instance_id: str, settings: Dict[str, Any]) -> None:
         """Initialize the plugin with instance ID and settings.

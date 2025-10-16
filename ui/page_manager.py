@@ -160,7 +160,7 @@ class PageManager(QWidget):
         
         self.prev_btn.setEnabled(multiple_pages)
         self.next_btn.setEnabled(multiple_pages)
-        self.remove_btn.setEnabled(has_pages)
+        self.remove_btn.setEnabled(multiple_pages)
         
         if has_pages and self.current_page:
             self.page_label.setText(
