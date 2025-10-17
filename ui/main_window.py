@@ -466,6 +466,35 @@ class MainWindow(QMainWindow):
                     "Plugin Error",
                     f"Failed to create plugin instance: {plugin_id}"
                 )
+        success = self.grid_controller.add_tile(tile)
+        
+        if not success:
+            logger.warning(f"Failed to add tile at ({row}, {col})")
+            return
+        
+        # SAVE THE TILE TO DATABASE IMMEDIATELY
+        tile_dict = {
+            'page_id': tile.page_id,
+            'plugin_id': tile.plugin_id,
+            'instance_id': tile.instance_id,
+            'row': tile.row,
+            'col': tile.col,
+            'width': tile.width,
+            'height': tile.height,
+            'z_index': tile.z_index,
+            'state': tile.state
+        }
+        tile_id = self.repository.create_tile(tile_dict)
+        tile.id = tile_id  # SET THE ID!
+        logger.info(f"Created tile {tile_id} in database")
+        
+        # Create plugin instance
+        self._ensure_plugin_instance(tile)
+        
+        # Refresh grid view
+        self.grid_view.refresh()
+        
+        logger.info(f"Added {plugin_id} tile at ({row}, {col})")
     
     def _reload_plugins(self) -> None:
         """Reload all plugins from disk."""
@@ -748,20 +777,24 @@ class MainWindow(QMainWindow):
             "</ul>"
         )
     
-    def closeEvent(self, event) -> None:
-        """Handle window close event.
-        
-        Args:
-            event: Close event.
-        """
-        # Save window size
-        self.config.window_width = self.width()
-        self.config.window_height = self.height()
-        self.config.save_settings()
+    def closeEvent(self, event):
+        """Handle window close event."""
+        logger.info("Main window closing")
         
         # Stop all plugin instances
-        for instance_id in list(self.plugin_loader._instances.keys()):
-            self.plugin_loader.destroy_instance(instance_id)
+        if hasattr(self, 'plugin_loader'):
+            for instance_id in list(self.plugin_loader._instances.keys()):
+                try:
+                    self.plugin_loader.dispose_instance(instance_id)  # Changed from destroy_instance
+                except Exception as e:
+                    logger.error(f"Error disposing plugin {instance_id}: {e}")
+            
+            # Shutdown supervisor (terminates all worker processes)
+            self.plugin_loader.shutdown()
         
-        logger.info("Window closed, configuration saved")
+        # Save window geometry
+        self.config.window_width = self.width()
+        self.config.window_height = self.height()
+        
+        # Accept the close event
         event.accept()
