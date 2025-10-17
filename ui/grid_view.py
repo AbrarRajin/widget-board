@@ -72,29 +72,59 @@ class GridView(QWidget):
         logger.info(f"Grid edit mode: {enabled}")
     
     def refresh(self) -> None:
-        """Refresh the grid view with current tiles."""
-        # Remove old tile widgets
-        for tile_widget in self.tile_widgets.values():
-            tile_widget.deleteLater()
+        """Refresh the grid display with current tiles."""
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        logger.info("=== GridView.refresh() called ===")
+        
+        # Clear existing tile widgets
+        for tile_id, widget in list(self.tile_widgets.items()):
+            logger.debug(f"Removing old widget for tile {tile_id}")
+            widget.hide()
+            widget.deleteLater()
         self.tile_widgets.clear()
         
-        # Get current page tiles
-        current_page = self.grid_controller.current_page
-        if not current_page:
+        # Get tiles for current page (use property, not method)
+        tiles = self.grid_controller.tiles  # Changed from get_current_tiles()
+        logger.info(f"Found {len(tiles)} tiles for current page")
+        
+        if not tiles:
+            logger.warning("No tiles to display")
             self.update()
             return
         
-        tiles = self.grid_controller.tiles_by_page.get(current_page.id, [])
-        
-        # Create tile widgets
+        # Create and show widgets for each tile
         for tile in tiles:
-            if tile.id is not None:
+            logger.info(f"Creating widget for tile {tile.id}: {tile.plugin_id} at ({tile.row}, {tile.col})")
+            
+            try:
+                # Create tile widget
                 tile_widget = self._create_tile_widget(tile)
-                self.tile_widgets[tile.id] = tile_widget
+                
+                # Set parent explicitly
+                tile_widget.setParent(self)
+                
+                # Update geometry
+                tile_widget.update_geometry()
+                
+                # Show the widget
                 tile_widget.show()
+                tile_widget.raise_()
+                
+                # Store in dictionary
+                self.tile_widgets[tile.id] = tile_widget
+                
+                logger.info(f"  Widget created: visible={tile_widget.isVisible()}, geometry={tile_widget.geometry()}")
+                
+            except Exception as e:
+                logger.error(f"Error creating tile widget for {tile.id}: {e}", exc_info=True)
         
-        logger.debug(f"Refreshed grid with {len(tiles)} tiles")
+        logger.info(f"Refresh complete: {len(self.tile_widgets)} widgets displayed")
+        
+        # Force update
         self.update()
+        self.repaint()
     
     def _create_tile_widget(self, tile: Tile) -> TileWidget:
         """Create a visual widget for a tile.
@@ -124,6 +154,9 @@ class GridView(QWidget):
         tile_widget.remove_requested.connect(
             lambda t=tile: self._handle_remove_request(t)
         )
+        
+
+
         
         return tile_widget
     

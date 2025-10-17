@@ -41,3 +41,4 @@
 - [x] Per-instance plugin settings
 
 ### Next: M4 - Out-of-Process Plugin Isolation
+M4 updated in 17th Friday check

@@ -1,139 +1,113 @@
 """Links widget plugin implementation."""
 
 from typing import Dict, Any, List
-from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QLabel, QPushButton,
-    QScrollArea, QFrame
-)
-from PySide6.QtCore import Qt, QUrl
-from PySide6.QtGui import QDesktopServices, QFont
-from core.plugin_api import PluginBase
+from core.plugin_api import WidgetPlugin, PluginMetadata  # Changed from PluginBase
 
 
-class LinksPlugin(PluginBase):
-    """A widget that displays a list of clickable links."""
+class LinksPlugin(WidgetPlugin):  # Changed from PluginBase
+    """A widget that displays quick access links."""
     
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        instance_id: str,
+        plugin_id: str,
+        metadata: PluginMetadata,
+        settings: Dict[str, Any]
+    ):
         """Initialize the links plugin."""
-        super().__init__()
-        self._widget: QWidget | None = None
-        self._links_container: QWidget | None = None
-        self._links_layout: QVBoxLayout | None = None
+        super().__init__(instance_id, plugin_id, metadata, settings)
     
-    def get_widget(self) -> QWidget:
-        """Create and return the links widget.
+    def init(self) -> None:
+        """Initialize the plugin."""
+        super().init()
+    
+    def start(self) -> None:
+        """Start the plugin lifecycle."""
+        super().start()
+    
+    def update(self, delta_time: float) -> None:
+        """Update plugin state.
+        
+        Args:
+            delta_time: Time since last update in seconds
+        """
+        # Links are static, nothing to update
+        pass
+    
+    def get_render_data(self) -> Dict[str, Any]:
+        """Get render data for this plugin.
         
         Returns:
-            QWidget with links display.
+            Dictionary containing HTML to display
         """
-        if self._widget is not None:
-            return self._widget
-        
-        # Create main widget
-        self._widget = QWidget()
-        main_layout = QVBoxLayout(self._widget)
-        main_layout.setContentsMargins(5, 5, 5, 5)
-        main_layout.setSpacing(5)
-        
-        # Title label
-        title = QLabel(self.settings.get("title", "Quick Links"))
-        title_font = QFont()
-        title_font.setPointSize(14)
-        title_font.setBold(True)
-        title.setFont(title_font)
-        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        main_layout.addWidget(title)
-        
-        # Scroll area for links
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        
-        # Links container
-        self._links_container = QWidget()
-        self._links_layout = QVBoxLayout(self._links_container)
-        self._links_layout.setSpacing(3)
-        self._links_layout.setContentsMargins(5, 5, 5, 5)
-        
-        scroll.setWidget(self._links_container)
-        main_layout.addWidget(scroll, 1)
-        
-        # Build links
-        self._build_links()
-        
-        return self._widget
-    
-    def update(self, settings: Dict[str, Any]) -> None:
-        """Update links with new settings.
-        
-        Args:
-            settings: New settings dictionary.
-        """
-        super().update(settings)
-        self._build_links()
-    
-    def _build_links(self) -> None:
-        """Build the list of link buttons from settings."""
-        if not self._links_layout:
-            return
-        
-        # Clear existing links
-        while self._links_layout.count():
-            item = self._links_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-        
         # Get links from settings
-        links: List[Dict[str, str]] = self.settings.get("links", [])
+        links = self.settings.get("links", [
+            {"title": "Google", "url": "https://www.google.com"},
+            {"title": "GitHub", "url": "https://github.com"},
+            {"title": "Stack Overflow", "url": "https://stackoverflow.com"}
+        ])
         
-        if not links:
-            # Show placeholder
-            label = QLabel("No links configured\n\nEdit settings to add links")
-            label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            label.setStyleSheet("color: #888888;")
-            self._links_layout.addWidget(label)
-            return
+        # Get theme settings
+        bg_color = self.settings.get("background_color", "#1976D2")
+        text_color = self.settings.get("text_color", "#FFFFFF")
         
-        # Create button for each link
-        for link_data in links:
-            name = link_data.get("name", "Unnamed Link")
-            url = link_data.get("url", "")
-            
-            if not url:
-                continue
-            
-            button = QPushButton(name)
-            button.setCursor(Qt.CursorShape.PointingHandCursor)
-            button.setStyleSheet("""
-                QPushButton {
-                    background-color: #0078D4;
-                    color: white;
-                    border: none;
-                    padding: 8px 12px;
-                    border-radius: 4px;
-                    text-align: left;
-                }
-                QPushButton:hover {
-                    background-color: #106EBE;
-                }
-                QPushButton:pressed {
-                    background-color: #005A9E;
-                }
-            """)
-            
-            # Connect click handler
-            button.clicked.connect(lambda checked=False, u=url: self._open_link(u))
-            
-            self._links_layout.addWidget(button)
+        # Build HTML for links
+        links_html = ""
+        for link in links:
+            title = link.get("title", "Link")
+            url = link.get("url", "#")
+            links_html += f"""
+            <a href="{url}" target="_blank" style="
+                display: block;
+                padding: 12px 16px;
+                margin: 8px 0;
+                background: rgba(255, 255, 255, 0.1);
+                color: {text_color};
+                text-decoration: none;
+                border-radius: 6px;
+                font-weight: 500;
+                transition: all 0.2s;
+                border: 1px solid rgba(255, 255, 255, 0.2);
+            " onmouseover="this.style.background='rgba(255, 255, 255, 0.2)'" 
+               onmouseout="this.style.background='rgba(255, 255, 255, 0.1)'">
+                {title}
+            </a>
+            """
         
-        # Add stretch at the end
-        self._links_layout.addStretch()
+        html = f"""
+        <div style="
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            background: linear-gradient(135deg, {bg_color} 0%, {bg_color}CC 100%);
+            color: {text_color};
+            font-family: 'Segoe UI', Arial, sans-serif;
+            border-radius: 8px;
+            padding: 16px;
+        ">
+            <div style="font-size: 18px; font-weight: bold; margin-bottom: 12px;">
+                Quick Links
+            </div>
+            <div style="flex: 1; overflow-y: auto;">
+                {links_html}
+            </div>
+        </div>
+        """
+        
+        return {
+            "html": html,
+            "needs_update": False  # Links are static
+        }
     
-    def _open_link(self, url: str) -> None:
-        """Open a link in the default browser.
+    def on_settings_changed(self, new_settings: Dict[str, Any]) -> None:
+        """Handle settings change.
         
         Args:
-            url: URL to open.
+            new_settings: New settings dictionary
         """
-        QDesktopServices.openUrl(QUrl(url))
+        super().on_settings_changed(new_settings)
+        # Links updated, trigger re-render
+    
+    def dispose(self) -> None:
+        """Dispose of the plugin and clean up resources."""
+        super().dispose()

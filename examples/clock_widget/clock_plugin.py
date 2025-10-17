@@ -2,63 +2,29 @@
 
 from datetime import datetime
 from typing import Dict, Any
-from PySide6.QtWidgets import QWidget, QLabel, QVBoxLayout
-from PySide6.QtCore import QTimer, Qt
-from PySide6.QtGui import QFont
-from core.plugin_api import PluginBase
+from PySide6.QtCore import QTimer
+from core.plugin_api import WidgetPlugin, PluginMetadata  # Changed from PluginBase
 
 
-class ClockPlugin(PluginBase):
+class ClockPlugin(WidgetPlugin):  # Changed from PluginBase
     """A simple clock widget that displays the current time."""
     
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        instance_id: str,
+        plugin_id: str,
+        metadata: PluginMetadata,
+        settings: Dict[str, Any]
+    ):
         """Initialize the clock plugin."""
-        super().__init__()
-        self._timer: QTimer | None = None
-        self._time_label: QLabel | None = None
-        self._date_label: QLabel | None = None
-        self._widget: QWidget | None = None
+        super().__init__(instance_id, plugin_id, metadata, settings)
+        self._timer = None
+        self._current_time = ""
     
-    def get_widget(self) -> QWidget:
-        """Create and return the clock widget.
-        
-        Returns:
-            QWidget with clock display.
-        """
-        if self._widget is not None:
-            return self._widget
-        
-        # Create widget
-        self._widget = QWidget()
-        layout = QVBoxLayout(self._widget)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        
-        # Time label
-        self._time_label = QLabel("--:--:--")
-        time_font = QFont()
-        time_font.setPointSize(self.settings.get("font_size", 24))
-        time_font.setBold(True)
-        self._time_label.setFont(time_font)
-        self._time_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(self._time_label)
-        
-        # Date label (optional)
-        if self.settings.get("show_date", True):
-            self._date_label = QLabel("")
-            date_font = QFont()
-            date_font.setPointSize(12)
-            self._date_label.setFont(date_font)
-            self._date_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            layout.addWidget(self._date_label)
-        
-        # Apply colors
-        self._apply_colors()
-        
-        # Update immediately
-        self._update_display()
-        
-        return self._widget
+    def init(self) -> None:
+        """Initialize the plugin."""
+        super().init()
+        self._update_time()
     
     def start(self) -> None:
         """Start the clock timer."""
@@ -66,11 +32,10 @@ class ClockPlugin(PluginBase):
         
         # Create timer for updates
         self._timer = QTimer()
-        self._timer.timeout.connect(self._update_display)
+        self._timer.timeout.connect(self._on_timer)
         
-        # Update every second if showing seconds, otherwise every minute
-        interval = 1000 if self.settings.get("show_seconds", True) else 60000
-        self._timer.start(interval)
+        # Update every second
+        self._timer.start(1000)
     
     def stop(self) -> None:
         """Stop the clock timer."""
@@ -78,95 +43,100 @@ class ClockPlugin(PluginBase):
             self._timer.stop()
         super().stop()
     
-    def update(self, settings: Dict[str, Any]) -> None:
-        """Update clock with new settings.
+    def update(self, delta_time: float) -> None:
+        """Update plugin state.
         
         Args:
-            settings: New settings dictionary.
+            delta_time: Time since last update in seconds
         """
-        super().update(settings)
+        # Timer handles updates, nothing to do here
+        pass
+    
+    def _on_timer(self) -> None:
+        """Handle timer tick."""
+        self._update_time()
+        self.render_updated.emit()
+    
+    def _update_time(self) -> None:
+        """Update the current time string."""
+        now = datetime.now()
         
-        # Restart timer if interval changed
-        if self._timer:
-            interval = 1000 if settings.get("show_seconds", True) else 60000
+        # Get format settings
+        use_24h = self.settings.get("use_24h_format", False)
+        show_seconds = self.settings.get("show_seconds", True)
+        show_date = self.settings.get("show_date", True)
+        
+        # Format time
+        if use_24h:
+            time_format = "%H:%M:%S" if show_seconds else "%H:%M"
+        else:
+            time_format = "%I:%M:%S %p" if show_seconds else "%I:%M %p"
+        
+        time_str = now.strftime(time_format)
+        
+        # Add date if enabled
+        if show_date:
+            date_str = now.strftime("%A, %B %d, %Y")
+            self._current_time = f"{time_str}<br><span style='font-size: 14px;'>{date_str}</span>"
+        else:
+            self._current_time = time_str
+    
+    def get_render_data(self) -> Dict[str, Any]:
+        """Get render data for this plugin.
+        
+        Returns:
+            Dictionary containing HTML to display
+        """
+        # Get theme settings
+        bg_color = self.settings.get("background_color", "#2196F3")
+        text_color = self.settings.get("text_color", "#FFFFFF")
+        font_size = self.settings.get("font_size", 32)
+        
+        html = f"""
+        <div style="
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            height: 100%;
+            background: linear-gradient(135deg, {bg_color} 0%, {bg_color}CC 100%);
+            color: {text_color};
+            font-family: 'Segoe UI', Arial, sans-serif;
+            border-radius: 8px;
+            padding: 20px;
+            text-align: center;
+        ">
+            <div style="font-size: {font_size}px; font-weight: bold;">
+                {self._current_time}
+            </div>
+        </div>
+        """
+        
+        return {
+            "html": html,
+            "needs_update": True  # Clock needs continuous updates
+        }
+    
+    def on_settings_changed(self, new_settings: Dict[str, Any]) -> None:
+        """Handle settings change.
+        
+        Args:
+            new_settings: New settings dictionary
+        """
+        super().on_settings_changed(new_settings)
+        
+        # Update timer interval if show_seconds changed
+        if self._timer and self._timer.isActive():
+            show_seconds = new_settings.get("show_seconds", True)
+            interval = 1000 if show_seconds else 60000
             self._timer.setInterval(interval)
         
-        # Update font size
-        if self._time_label:
-            font = self._time_label.font()
-            font.setPointSize(settings.get("font_size", 24))
-            self._time_label.setFont(font)
-        
-        # Show/hide date
-        if self._date_label:
-            self._date_label.setVisible(settings.get("show_date", True))
-        
-        # Update colors
-        self._apply_colors()
-        
-        # Refresh display
-        self._update_display()
+        # Update display
+        self._update_time()
     
     def dispose(self) -> None:
-        """Clean up clock resources."""
+        """Dispose of the plugin and clean up resources."""
         if self._timer:
             self._timer.stop()
             self._timer = None
         super().dispose()
-    
-    def _update_display(self) -> None:
-        """Update the time and date display."""
-        if not self._time_label:
-            return
-        
-        now = datetime.now()
-        
-        # Format time
-        use_24h = self.settings.get("format_24h", False)
-        show_seconds = self.settings.get("show_seconds", True)
-        
-        if use_24h:
-            if show_seconds:
-                time_str = now.strftime("%H:%M:%S")
-            else:
-                time_str = now.strftime("%H:%M")
-        else:
-            if show_seconds:
-                time_str = now.strftime("%I:%M:%S %p")
-            else:
-                time_str = now.strftime("%I:%M %p")
-        
-        self._time_label.setText(time_str)
-        
-        # Format date
-        if self._date_label and self.settings.get("show_date", True):
-            date_format = self.settings.get("date_format", "MM/DD/YYYY")
-            
-            if date_format == "MM/DD/YYYY":
-                date_str = now.strftime("%m/%d/%Y")
-            elif date_format == "DD/MM/YYYY":
-                date_str = now.strftime("%d/%m/%Y")
-            else:  # YYYY-MM-DD
-                date_str = now.strftime("%Y-%m-%d")
-            
-            # Add day of week
-            day_of_week = now.strftime("%A")
-            self._date_label.setText(f"{day_of_week}, {date_str}")
-    
-    def _apply_colors(self) -> None:
-        """Apply text and background colors from settings."""
-        if not self._widget:
-            return
-        
-        text_color = self.settings.get("text_color", "#000000")
-        bg_color = self.settings.get("background_color", "#FFFFFF")
-        
-        style = f"""
-            QWidget {{
-                background-color: {bg_color};
-            }}
-            QLabel {{
-                color: {text_color};
-            }}
-        """
-        self._widget.setStyleSheet(style)
