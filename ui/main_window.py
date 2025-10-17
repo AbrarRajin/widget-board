@@ -592,43 +592,47 @@ class MainWindow(QMainWindow):
         logger.info(f"Removed page: {page.name}")
     
     def _on_layout_changed(self) -> None:
-        """Handle layout change event."""
-        # Save current layout to database
-        current_page = self.grid_controller.current_page
-        if current_page:
-            tiles = self.grid_controller.tiles_by_page.get(current_page.id, [])
-            for tile in tiles:
-                try:
-                    if tile.id is None:
-                        # New tile, insert it
-                        tile_data = {
-                            'page_id': tile.page_id,
-                            'plugin_id': tile.plugin_id,
-                            'instance_id': tile.instance_id,
-                            'row': tile.row,
-                            'col': tile.col,
-                            'width': tile.width,
-                            'height': tile.height,
-                            'z_index': tile.z_index,
-                            'state_json': json.dumps(tile.state)
-                        }
-                        tile.id = self.repository.create_tile(tile_data)
-                    else:
-                        # Existing tile, update it
-                        tile_data = {
-                            'row': tile.row,
-                            'col': tile.col,
-                            'width': tile.width,
-                            'height': tile.height,
-                            'z_index': tile.z_index,
-                            'state_json': json.dumps(tile.state)
-                        }
-                        self.repository.update_tile(tile.id, tile_data)
-                except Exception as e:
-                    logger.error(f"Failed to save tile {tile.id}: {e}")
-            
-            # APSW uses autocommit - changes are automatically saved
-            logger.debug("Layout saved to database")
+        """Handle layout change event - save tiles to database."""
+        logger.debug("Layout changed, saving to database")
+        
+        if not self.grid_controller.current_page:
+            return
+        
+        current_page_id = self.grid_controller.current_page.id
+        tiles = self.grid_controller.tiles_by_page.get(current_page_id, [])
+        
+        for tile in tiles:
+            try:
+                if tile.id is None:
+                    # New tile - create in database
+                    tile_dict = {
+                        'page_id': tile.page_id,
+                        'plugin_id': tile.plugin_id,
+                        'instance_id': tile.instance_id,
+                        'row': tile.row,
+                        'col': tile.col,
+                        'width': tile.width,
+                        'height': tile.height,
+                        'z_index': tile.z_index,
+                        'state': tile.state
+                    }
+                    tile_id = self.repository.create_tile(tile_dict)
+                    tile.id = tile_id
+                    logger.info(f"Created tile {tile_id} in database")
+                else:
+                    # Existing tile - update in database
+                    tile_dict = {
+                        'row': tile.row,
+                        'col': tile.col,
+                        'width': tile.width,
+                        'height': tile.height,
+                        'z_index': tile.z_index,
+                        'state': tile.state
+                    }
+                    self.repository.update_tile(tile.id, tile_dict)
+                    logger.debug(f"Updated tile {tile.id} in database")
+            except Exception as e:
+                logger.error(f"Error saving tile: {e}", exc_info=True)
     
     def _on_import_layout(self) -> None:
         """Handle import layout action."""

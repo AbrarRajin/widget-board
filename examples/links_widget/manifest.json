@@ -2,17 +2,18 @@
   "plugin_id": "links_widget",
   "name": "Quick Links",
   "version": "1.0.0",
-  "description": "Display a list of clickable links",
+  "description": "Quick access links to your favorite websites",
   "author": "WidgetBoard Team",
-  "module_path": "examples.links_widget",
+  "module_path": "examples.links_widget.links_plugin",
   "class_name": "LinksPlugin",
-  "schema_path": "../../schema/links_widget_settings.json",
-  "size_constraints": {
-    "min_width": 2,
-    "min_height": 2,
-    "max_width": 4,
-    "max_height": 6,
-    "default_width": 2,
-    "default_height": 3
-  }
+  "execution_mode": "out_of_process",
+  "worker_script": "examples/links_widget/worker.py",
+  "schema_path": "schema/links_widget_settings.json",
+  "icon_path": null,
+  "min_width": 2,
+  "min_height": 2,
+  "max_width": 4,
+  "max_height": 4,
+  "default_width": 2,
+  "default_height": 2
 }
