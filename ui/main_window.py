@@ -375,59 +375,30 @@ class MainWindow(QMainWindow):
             logger.info(f"Added test tile at ({row}, {col})")
     
     def _add_plugin_tile(self, plugin_id: str) -> None:
-        """Add a tile with a specific plugin.
-        
-        Args:
-            plugin_id: ID of the plugin to add.
-        """
-        if not self.grid_view:
-            return
-        
-        metadata = self.plugin_loader.get_metadata(plugin_id)
-        if not metadata:
-            QMessageBox.warning(self, "Error", f"Plugin not found: {plugin_id}")
-            return
-        
+        """Add a plugin tile to the current page."""
         # Get current page
         current_page = self.grid_controller.current_page
         if not current_page:
-            QMessageBox.warning(self, "Error", "No active page")
+            logger.error("No current page")
+            QMessageBox.warning(self, "Error", "No page selected")
             return
         
-        # Find empty space in grid
-        position = self.grid_controller.find_empty_space(
+        logger.info(f"Adding {plugin_id} to page '{current_page.name}' (ID: {current_page.id})")
+        
+        # Get plugin metadata
+        metadata = self.plugin_loader.get_metadata(plugin_id)
+        if not metadata:
+            logger.error(f"Plugin not found: {plugin_id}")
+            return
+        
+        # Find empty space
+        row, col = self.grid_controller.find_empty_space(
             metadata.default_width,
             metadata.default_height
-        )
-        
-        if not position:
-            QMessageBox.warning(
-                self,
-                "Grid Full",
-                "No space available for new tile. Remove some tiles or create a new page."
-            )
-            return
-        
-        row, col = position
-        
-        # Generate instance ID
-        instance_id = f"{plugin_id}_{uuid.uuid4().hex[:8]}"
-        
-        # Get default settings from schema
-        settings = {}
-        if metadata.schema_path:
-            try:
-                import json
-                with open(metadata.schema_path, 'r') as f:
-                    schema = json.load(f)
-                    # Extract default values from schema
-                    for prop_name, prop_schema in schema.get("properties", {}).items():
-                        if "default" in prop_schema:
-                            settings[prop_name] = prop_schema["default"]
-            except Exception as e:
-                logger.error(f"Error loading schema defaults: {e}")
+        ) or (0, 0)
         
         # Create tile
+        instance_id = f"{plugin_id}_{uuid.uuid4().hex[:8]}"
         tile = Tile(
             id=None,
             page_id=current_page.id,
@@ -438,41 +409,20 @@ class MainWindow(QMainWindow):
             width=metadata.default_width,
             height=metadata.default_height,
             z_index=0,
-            state=settings
+            state={}
         )
         
-        # Add to grid
-        if self.grid_controller.add_tile(tile):
-            # Create plugin instance
-            plugin = self.plugin_loader.create_instance(
-                plugin_id,
-                instance_id,
-                settings
-            )
-            
-            if plugin:
-                # Start the plugin
-                self.plugin_loader.start_instance(instance_id)
-                
-                # Update grid view to show new tile with plugin
-                self.grid_view.refresh()
-                
-                logger.info(f"Added {metadata.name} tile at ({row}, {col})")
-            else:
-                # Failed to create plugin, remove tile
-                self.grid_controller.remove_tile(tile.id)
-                QMessageBox.warning(
-                    self,
-                    "Plugin Error",
-                    f"Failed to create plugin instance: {plugin_id}"
-                )
+        # Add tile to grid controller (ONLY ONCE)
         success = self.grid_controller.add_tile(tile)
         
         if not success:
             logger.warning(f"Failed to add tile at ({row}, {col})")
+            QMessageBox.warning(self, "Error", f"Cannot place tile at ({row}, {col})")
             return
         
-        # SAVE THE TILE TO DATABASE IMMEDIATELY
+        logger.info(f"Added {plugin_id} tile at ({row}, {col})")
+        
+        # Save to database IMMEDIATELY
         tile_dict = {
             'page_id': tile.page_id,
             'plugin_id': tile.plugin_id,
@@ -485,16 +435,14 @@ class MainWindow(QMainWindow):
             'state': tile.state
         }
         tile_id = self.repository.create_tile(tile_dict)
-        tile.id = tile_id  # SET THE ID!
+        tile.id = tile_id
         logger.info(f"Created tile {tile_id} in database")
         
         # Create plugin instance
         self._ensure_plugin_instance(tile)
         
-        # Refresh grid view
+        # Refresh grid view (ONLY ONCE)
         self.grid_view.refresh()
-        
-        logger.info(f"Added {plugin_id} tile at ({row}, {col})")
     
     def _reload_plugins(self) -> None:
         """Reload all plugins from disk."""

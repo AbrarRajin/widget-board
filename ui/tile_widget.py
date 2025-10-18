@@ -311,12 +311,15 @@ class TileWidget(QWidget):
             if self._get_resize_handle_rect().contains(event.pos()):
                 self.is_resizing = True
                 self.drag_start_pos = event.pos()
-                self.start_geometry = QRect(self.geometry())  # Store starting geometry
+                self.resize_start_width = self.tile.width
+                self.resize_start_height = self.tile.height
                 self.setCursor(Qt.CursorShape.SizeFDiagCursor)
+                event.accept()
             else:
                 self.is_dragging = True
                 self.drag_start_pos = event.pos()
                 self.setCursor(Qt.CursorShape.ClosedHandCursor)
+                event.accept()
     
     def mouseMoveEvent(self, event):
         """Handle mouse move."""
@@ -333,21 +336,42 @@ class TileWidget(QWidget):
         # Handle dragging
         if self.is_dragging:
             delta = event.pos() - self.drag_start_pos
-            new_col = (self.x() + delta.x()) // self.cell_size
-            new_row = (self.y() + delta.y()) // self.cell_size
+            new_x = self.x() + delta.x()
+            new_y = self.y() + delta.y()
+            
+            # Snap to grid
+            new_col = round(new_x / self.cell_size)
+            new_row = round(new_y / self.cell_size)
+            
+            # Clamp to grid bounds
+            new_col = max(0, min(7 - self.tile.width + 1, new_col))
+            new_row = max(0, min(7 - self.tile.height + 1, new_row))
             
             if new_col != self.tile.col or new_row != self.tile.row:
                 self.move_requested.emit(new_row, new_col)
         
-        # Handle resizing
+        # Handle resizing - FIXED VERSION
         elif self.is_resizing:
+            # Calculate total delta from start of resize
             delta = event.pos() - self.drag_start_pos
-            new_width = max(1, (self.width() + delta.x()) // self.cell_size)
-            new_height = max(1, (self.height() + delta.y()) // self.cell_size)
             
+            # Calculate how many cells we've moved (using larger threshold for better feel)
+            cells_x = round(delta.x() / self.cell_size)
+            cells_y = round(delta.y() / self.cell_size)
+            
+            # Calculate new size
+            new_width = self.resize_start_width + cells_x
+            new_height = self.resize_start_height + cells_y
+            
+            # Clamp to valid range (minimum 1, maximum to grid edge)
+            max_width = 8 - self.tile.col
+            max_height = 8 - self.tile.row
+            new_width = max(1, min(max_width, new_width))
+            new_height = max(1, min(max_height, new_height))
+            
+            # Only emit if size actually changed
             if new_width != self.tile.width or new_height != self.tile.height:
                 self.resize_requested.emit(new_width, new_height)
-                self.drag_start_pos = event.pos()
     
     def mouseReleaseEvent(self, event):
         """Handle mouse release."""
@@ -355,6 +379,7 @@ class TileWidget(QWidget):
             self.is_dragging = False
             self.is_resizing = False
             self.setCursor(Qt.CursorShape.OpenHandCursor)
+            event.accept()
     
     def closeEvent(self, event):
         """Handle widget close event."""

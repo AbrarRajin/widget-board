@@ -56,56 +56,74 @@ class GridView(QWidget):
         )
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
     
-    def set_edit_mode(self, enabled: bool) -> None:
-        """Enable or disable edit mode.
-        
-        Args:
-            enabled: True to enable edit mode.
-        """
-        self.edit_mode = enabled
-        
-        # Update all tile widgets
-        for tile_widget in self.tile_widgets.values():
-            tile_widget.set_edit_mode(enabled)
-        
-        self.update()
-        logger.info(f"Grid edit mode: {enabled}")
-    
     def refresh(self) -> None:
-        """Refresh the grid display with current tiles."""
-        import logging
-        logger = logging.getLogger(__name__)
-        
+        """Refresh the grid display with tiles from the current page only."""
         logger.info("=== GridView.refresh() called ===")
         
         # Clear existing tile widgets
         for tile_id, widget in list(self.tile_widgets.items()):
-            logger.debug(f"Removing old widget for tile {tile_id}")
+            logger.debug(f"Removing widget for tile {tile_id}")
             widget.hide()
             widget.deleteLater()
         self.tile_widgets.clear()
         
-        # Get tiles for current page (use property, not method)
-        tiles = self.grid_controller.tiles  # Changed from get_current_tiles()
-        logger.info(f"Found {len(tiles)} tiles for current page")
-        
-        if not tiles:
-            logger.warning("No tiles to display")
+        # Check if we have a current page
+        if not self.grid_controller.current_page:
+            logger.warning("No current page set, cannot display tiles")
             self.update()
             return
         
-        # Create and show widgets for each tile
+        # Get current page info
+        current_page = self.grid_controller.current_page
+        current_page_id = current_page.id
+        
+        logger.info(f"Refreshing page '{current_page.name}' (ID: {current_page_id})")
+        
+        # Get tiles for CURRENT page only
+        tiles = self.grid_controller.tiles_by_page.get(current_page_id, [])
+        
+        logger.info(f"Found {len(tiles)} tiles for current page")
+        
+        # If no tiles, just update and return
+        if not tiles:
+            logger.info("No tiles to display on current page")
+            self.update()
+            return
+        
+        # Track processed tile IDs to prevent duplicates
+        processed_tile_ids = set()
+        
+        # Create and show widgets for each tile on current page
         for tile in tiles:
-            logger.info(f"Creating widget for tile {tile.id}: {tile.plugin_id} at ({tile.row}, {tile.col})")
+            # CRITICAL: Skip if already processed (duplicate)
+            if tile.id in processed_tile_ids:
+                logger.warning(f"Skipping duplicate tile {tile.id}")
+                continue
+            
+            # CRITICAL: Double-check tile belongs to current page
+            if tile.page_id != current_page_id:
+                logger.warning(
+                    f"Skipping tile {tile.id} - belongs to page {tile.page_id}, "
+                    f"not current page {current_page_id}"
+                )
+                continue
+            
+            logger.info(
+                f"Creating widget for tile {tile.id}: {tile.plugin_id} "
+                f"at ({tile.row}, {tile.col})"
+            )
             
             try:
                 # Create tile widget
                 tile_widget = self._create_tile_widget(tile)
                 
-                # Set parent explicitly
+                # Ensure parent is set
                 tile_widget.setParent(self)
                 
-                # Update geometry
+                # Set edit mode state
+                tile_widget.set_edit_mode(self.edit_mode)
+                
+                # Update geometry to match tile position/size
                 tile_widget.update_geometry()
                 
                 # Show the widget
@@ -115,16 +133,47 @@ class GridView(QWidget):
                 # Store in dictionary
                 self.tile_widgets[tile.id] = tile_widget
                 
-                logger.info(f"  Widget created: visible={tile_widget.isVisible()}, geometry={tile_widget.geometry()}")
+                # Mark as processed
+                processed_tile_ids.add(tile.id)
+                
+                logger.debug(
+                    f"  Widget created: visible={tile_widget.isVisible()}, "
+                    f"geometry={tile_widget.geometry()}"
+                )
                 
             except Exception as e:
-                logger.error(f"Error creating tile widget for {tile.id}: {e}", exc_info=True)
+                logger.error(
+                    f"Error creating tile widget for {tile.id}: {e}",
+                    exc_info=True
+                )
         
-        logger.info(f"Refresh complete: {len(self.tile_widgets)} widgets displayed")
+        logger.info(
+            f"Refresh complete: {len(self.tile_widgets)} widgets displayed "
+            f"on page '{current_page.name}'"
+        )
         
-        # Force update
+        # Force repaint
         self.update()
         self.repaint()
+
+    def set_edit_mode(self, enabled: bool) -> None:
+        """Enable or disable edit mode.
+        
+        Args:
+            enabled: True to enable edit mode, False to disable
+        """
+        self.edit_mode = enabled
+        
+        logger.info(f"Grid edit mode: {enabled}")
+        
+        # Update all existing tile widgets
+        for tile_widget in self.tile_widgets.values():
+            tile_widget.set_edit_mode(enabled)
+        
+        # Trigger repaint to show/hide grid overlay
+        self.update()
+
+
     
     def _create_tile_widget(self, tile: Tile) -> TileWidget:
         """Create a visual widget for a tile.
@@ -342,3 +391,4 @@ class GridView(QWidget):
             self.GRID_COLS * self.cell_size,
             self.GRID_ROWS * self.cell_size
         )
+    
