@@ -1,0 +1,48 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Quick Links Settings",
+  "description": "Configuration for the quick links widget",
+  "type": "object",
+  "properties": {
+    "title": {
+      "type": "string",
+      "title": "Widget Title",
+      "description": "Title displayed at the top of the widget",
+      "default": "Quick Links",
+      "maxLength": 50
+    },
+    "links": {
+      "type": "array",
+      "title": "Links",
+      "description": "List of links to display",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Link Name",
+            "description": "Display name for the link"
+          },
+          "url": {
+            "type": "string",
+            "title": "URL",
+            "description": "Web address to open",
+            "format": "uri"
+          }
+        },
+        "required": ["name", "url"]
+      },
+      "default": [
+        {
+          "name": "Google",
+          "url": "https://www.google.com"
+        },
+        {
+          "name": "GitHub",
+          "url": "https://github.com"
+        }
+      ]
+    }
+  },
+  "required": ["title"]
+}

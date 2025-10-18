@@ -1,15 +1,13 @@
-"""Main grid view for displaying and editing tiles."""
+"""Grid view - displays the 8×8 tile grid with plugin rendering support."""
 
 import logging
 from typing import Dict, Optional
-from pathlib import Path
 from PySide6.QtWidgets import QWidget, QMessageBox
-from PySide6.QtCore import Qt, Signal, QSize
+from PySide6.QtCore import Qt, Signal, QPoint, QRect, QSize
 from PySide6.QtGui import QPainter, QColor, QPen
 
-from core.models import Tile, Page
+from core.models import Tile
 from core.grid_controller import GridController
-from core.schema_loader import SchemaLoader
 from ui.tile_widget import TileWidget
 from ui.settings_dialog import SettingsDialog
 
@@ -17,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 class GridView(QWidget):
-    """Main 8×8 grid view for tiles."""
+    """8×8 grid view for displaying and interacting with tiles."""
     
     # Signals
     layout_changed = Signal()
@@ -26,283 +24,371 @@ class GridView(QWidget):
     GRID_ROWS = 8
     GRID_COLS = 8
     MIN_CELL_SIZE = 80
-    PREFERRED_CELL_SIZE = 120
+    DEFAULT_CELL_SIZE = 120
     
-    def __init__(self, controller: GridController, parent=None) -> None:
+    def __init__(self, grid_controller: GridController, parent: Optional[QWidget] = None) -> None:
         """Initialize grid view.
         
         Args:
-            controller: Grid controller for layout management.
-            parent: Parent widget.
+            grid_controller: The grid controller managing tiles.
+            parent: Parent widget (should be MainWindow).
         """
         super().__init__(parent)
         
-        self.controller = controller
-        self.current_page: Optional[Page] = None
-        self.tile_widgets: Dict[str, TileWidget] = {}  # instance_id -> widget
-        self.is_edit_mode = False
-        self.cell_size = self.PREFERRED_CELL_SIZE
+        self.grid_controller = grid_controller
+        self.edit_mode = False
+        self.cell_size = self.DEFAULT_CELL_SIZE
+        
+        # Tile widgets mapping
+        self.tile_widgets: Dict[int, TileWidget] = {}  # tile.id -> TileWidget
         
         self._setup_ui()
     
     def _setup_ui(self) -> None:
         """Set up the grid view UI."""
         self.setMinimumSize(
-            self.MIN_CELL_SIZE * self.GRID_COLS,
-            self.MIN_CELL_SIZE * self.GRID_ROWS
+            self.GRID_COLS * self.MIN_CELL_SIZE,
+            self.GRID_ROWS * self.MIN_CELL_SIZE
         )
-        
-        # Set background
-        self.setAutoFillBackground(True)
-        palette = self.palette()
-        palette.setColor(self.backgroundRole(), QColor("#FFFFFF"))
-        self.setPalette(palette)
-    
-    def sizeHint(self) -> QSize:
-        """Provide size hint for layout.
-        
-        Returns:
-            Preferred size for the grid.
-        """
-        return QSize(
-            self.cell_size * self.GRID_COLS,
-            self.cell_size * self.GRID_ROWS
+        self.resize(
+            self.GRID_COLS * self.cell_size,
+            self.GRID_ROWS * self.cell_size
         )
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
     
-    def set_page(self, page: Page, tiles: list[Tile]) -> None:
-        """Set the current page and its tiles.
+    def refresh(self) -> None:
+        """Refresh the grid display with tiles from the current page only."""
+        logger.info("=== GridView.refresh() called ===")
         
-        Args:
-            page: Page to display.
-            tiles: List of tiles on the page.
-        """
-        self.current_page = page
-        
-        # Clear existing widgets
-        for widget in self.tile_widgets.values():
+        # Clear existing tile widgets
+        for tile_id, widget in list(self.tile_widgets.items()):
+            logger.debug(f"Removing widget for tile {tile_id}")
+            widget.hide()
             widget.deleteLater()
         self.tile_widgets.clear()
         
-        # Update controller
-        self.controller.set_tiles(tiles)
+        # Check if we have a current page
+        if not self.grid_controller.current_page:
+            logger.warning("No current page set, cannot display tiles")
+            self.update()
+            return
         
-        # Create widgets for tiles
+        # Get current page info
+        current_page = self.grid_controller.current_page
+        current_page_id = current_page.id
+        
+        logger.info(f"Refreshing page '{current_page.name}' (ID: {current_page_id})")
+        
+        # Get tiles for CURRENT page only
+        tiles = self.grid_controller.tiles_by_page.get(current_page_id, [])
+        
+        logger.info(f"Found {len(tiles)} tiles for current page")
+        
+        # If no tiles, just update and return
+        if not tiles:
+            logger.info("No tiles to display on current page")
+            self.update()
+            return
+        
+        # Track processed tile IDs to prevent duplicates
+        processed_tile_ids = set()
+        
+        # Create and show widgets for each tile on current page
         for tile in tiles:
-            self._create_tile_widget(tile)
+            # CRITICAL: Skip if already processed (duplicate)
+            if tile.id in processed_tile_ids:
+                logger.warning(f"Skipping duplicate tile {tile.id}")
+                continue
+            
+            # CRITICAL: Double-check tile belongs to current page
+            if tile.page_id != current_page_id:
+                logger.warning(
+                    f"Skipping tile {tile.id} - belongs to page {tile.page_id}, "
+                    f"not current page {current_page_id}"
+                )
+                continue
+            
+            logger.info(
+                f"Creating widget for tile {tile.id}: {tile.plugin_id} "
+                f"at ({tile.row}, {tile.col})"
+            )
+            
+            try:
+                # Create tile widget
+                tile_widget = self._create_tile_widget(tile)
+                
+                # Ensure parent is set
+                tile_widget.setParent(self)
+                
+                # Set edit mode state
+                tile_widget.set_edit_mode(self.edit_mode)
+                
+                # Update geometry to match tile position/size
+                tile_widget.update_geometry()
+                
+                # Show the widget
+                tile_widget.show()
+                tile_widget.raise_()
+                
+                # Store in dictionary
+                self.tile_widgets[tile.id] = tile_widget
+                
+                # Mark as processed
+                processed_tile_ids.add(tile.id)
+                
+                logger.debug(
+                    f"  Widget created: visible={tile_widget.isVisible()}, "
+                    f"geometry={tile_widget.geometry()}"
+                )
+                
+            except Exception as e:
+                logger.error(
+                    f"Error creating tile widget for {tile.id}: {e}",
+                    exc_info=True
+                )
         
-        logger.info("Loaded page '%s' with %d tiles", page.name, len(tiles))
+        logger.info(
+            f"Refresh complete: {len(self.tile_widgets)} widgets displayed "
+            f"on page '{current_page.name}'"
+        )
+        
+        # Force repaint
         self.update()
-    
-    def _create_tile_widget(self, tile: Tile) -> TileWidget:
-        """Create a widget for a tile.
-        
-        Args:
-            tile: Tile to create widget for.
-        
-        Returns:
-            Created tile widget.
-        """
-        widget = TileWidget(tile, self.cell_size, self)
-        widget.set_edit_mode(self.is_edit_mode)
-        widget.show()
-        
-        # Connect signals
-        widget.move_requested.connect(lambda r, c, t=tile: self._on_tile_move(t, r, c))
-        widget.resize_requested.connect(lambda w, h, t=tile: self._on_tile_resize(t, w, h))
-        widget.remove_requested.connect(lambda t=tile: self._on_tile_remove(t))
-        widget.settings_requested.connect(lambda t=tile: self._on_tile_settings(t))
-        
-        self.tile_widgets[tile.instance_id] = widget
-        return widget
-    
-    def add_tile(self, tile: Tile) -> bool:
-        """Add a new tile to the grid.
-        
-        Args:
-            tile: Tile to add.
-        
-        Returns:
-            True if tile was added successfully.
-        """
-        if self.controller.add_tile(tile):
-            self._create_tile_widget(tile)
-            self.layout_changed.emit()
-            return True
-        return False
-    
+        self.repaint()
+
     def set_edit_mode(self, enabled: bool) -> None:
         """Enable or disable edit mode.
         
         Args:
-            enabled: True to enable edit mode.
+            enabled: True to enable edit mode, False to disable
         """
-        self.is_edit_mode = enabled
+        self.edit_mode = enabled
         
-        # Update all tile widgets
-        for widget in self.tile_widgets.values():
-            widget.set_edit_mode(enabled)
+        logger.info(f"Grid edit mode: {enabled}")
         
-        logger.info("Edit mode: %s", "enabled" if enabled else "disabled")
+        # Update all existing tile widgets
+        for tile_widget in self.tile_widgets.values():
+            tile_widget.set_edit_mode(enabled)
+        
+        # Trigger repaint to show/hide grid overlay
         self.update()
+
+
     
-    def _on_tile_move(self, tile: Tile, new_row: int, new_col: int) -> None:
+    def _create_tile_widget(self, tile: Tile) -> TileWidget:
+        """Create a visual widget for a tile.
+        
+        Args:
+            tile: The tile model.
+        
+        Returns:
+            TileWidget instance.
+        """
+        # Get plugin instance if exists
+        plugin = None
+        if hasattr(self.parent(), 'plugin_loader'):
+            plugin = self.parent().plugin_loader.get_instance(tile.instance_id)
+        
+        # Create tile widget with plugin
+        tile_widget = TileWidget(tile, self.cell_size, self, plugin)
+        tile_widget.set_edit_mode(self.edit_mode)
+        
+        # Connect signals
+        tile_widget.move_requested.connect(
+            lambda r, c, t=tile: self._handle_move_request(t, r, c)
+        )
+        tile_widget.resize_requested.connect(
+            lambda w, h, t=tile: self._handle_resize_request(t, w, h)
+        )
+        tile_widget.remove_requested.connect(
+            lambda t=tile: self._handle_remove_request(t)
+        )
+        
+
+
+        
+        return tile_widget
+    
+    def _handle_move_request(self, tile: Tile, new_row: int, new_col: int) -> None:
         """Handle tile move request.
         
         Args:
-            tile: Tile being moved.
-            new_row: Target row.
-            new_col: Target column.
+            tile: The tile to move.
+            new_row: New row position.
+            new_col: New column position.
         """
-        if self.controller.move_tile(tile, new_row, new_col):
-            # Update widget geometry
-            widget = self.tile_widgets.get(tile.instance_id)
-            if widget:
-                widget.update_geometry()
+        if self.grid_controller.move_tile(tile.id, new_row, new_col):
+            # Update tile widget
+            if tile.id in self.tile_widgets:
+                self.tile_widgets[tile.id].update_geometry()
             
+            # Emit signal to save changes
             self.layout_changed.emit()
-            logger.info("Moved tile %s to (%d, %d)", tile.instance_id, new_row, new_col)
+            logger.debug(f"Moved tile {tile.id} to ({new_row}, {new_col})")
+        else:
+            # Move failed (collision or out of bounds)
+            logger.debug(f"Move failed for tile {tile.id} to ({new_row}, {new_col})")
     
-    def _on_tile_resize(self, tile: Tile, new_width: int, new_height: int) -> None:
+    def _handle_resize_request(self, tile: Tile, new_width: int, new_height: int) -> None:
         """Handle tile resize request.
         
         Args:
-            tile: Tile being resized.
-            new_width: Target width.
-            new_height: Target height.
+            tile: The tile to resize.
+            new_width: New width in grid cells.
+            new_height: New height in grid cells.
         """
-        if self.controller.resize_tile(tile, new_width, new_height):
-            # Update widget geometry
-            widget = self.tile_widgets.get(tile.instance_id)
-            if widget:
-                widget.update_geometry()
+        if self.grid_controller.resize_tile(tile.id, new_width, new_height):
+            # Update tile widget
+            if tile.id in self.tile_widgets:
+                self.tile_widgets[tile.id].update_geometry()
             
+            # Emit signal to save changes
             self.layout_changed.emit()
-            logger.info("Resized tile %s to %dx%d", tile.instance_id, new_width, new_height)
+            logger.debug(f"Resized tile {tile.id} to {new_width}×{new_height}")
+        else:
+            # Resize failed (collision or invalid size)
+            logger.debug(f"Resize failed for tile {tile.id} to {new_width}×{new_height}")
     
-    def _on_tile_remove(self, tile: Tile) -> None:
-        """Handle tile remove request.
+    def _handle_remove_request(self, tile: Tile) -> None:
+        """Handle tile removal request.
         
         Args:
-            tile: Tile to remove.
+            tile: The tile to remove.
         """
-        # Remove from controller
-        self.controller.remove_tile(tile)
-        
-        # Remove widget
-        widget = self.tile_widgets.pop(tile.instance_id, None)
-        if widget:
-            widget.deleteLater()
-        
-        self.layout_changed.emit()
-        logger.info("Removed tile %s", tile.instance_id)
-    
-    def _on_tile_settings(self, tile: Tile) -> None:
-        """Handle tile settings request.
-        
-        Args:
-            tile: Tile to configure.
-        """
-        # Load schema for this plugin (or use default example schema)
-        schema_loader = SchemaLoader()
-        
-        try:
-            # Try to load plugin-specific schema
-            schema_path = Path(__file__).parent.parent / "schema" / f"{tile.plugin_id}_settings.json"
-            if schema_path.exists():
-                schema = schema_loader.load_schema(schema_path)
-            else:
-                # Use example schema
-                schema = schema_loader.load_schema_by_name("widget_settings_example.json")
-        except Exception as e:
-            logger.error("Failed to load schema: %s", e)
-            QMessageBox.warning(
-                self,
-                "Settings Unavailable",
-                f"Could not load settings schema for {tile.plugin_id}"
-            )
-            return
-        
-        # Get current settings from tile state
-        current_settings = tile.state.get("settings", schema_loader.get_default_values(schema))
-        
-        # Show settings dialog
-        dialog = SettingsDialog(
-            schema,
-            current_settings,
-            title=f"{tile.plugin_id} Settings",
-            parent=self
+        reply = QMessageBox.question(
+            self,
+            "Remove Tile",
+            f"Remove tile '{tile.plugin_id}'?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
         )
         
-        if dialog.exec():
-            # Save settings to tile state
-            tile.state["settings"] = dialog.get_settings()
+        if reply == QMessageBox.StandardButton.Yes:
+            # Destroy plugin instance
+            if hasattr(self.parent(), 'plugin_loader'):
+                self.parent().plugin_loader.destroy_instance(tile.instance_id)
+            
+            # Delete from database
+            if hasattr(self.parent(), 'repository') and tile.id is not None:
+                self.parent().repository.delete_tile(tile.id)
+            
+            # Remove from grid controller
+            self.grid_controller.remove_tile(tile.id)
+            
+            # Remove widget
+            if tile.id in self.tile_widgets:
+                self.tile_widgets[tile.id].deleteLater()
+                del self.tile_widgets[tile.id]
+            
+            # Emit signal (for any additional cleanup)
             self.layout_changed.emit()
-            logger.info("Updated settings for tile %s", tile.instance_id)
-    
-    def get_tiles(self) -> list[Tile]:
-        """Get all tiles currently in the grid.
-        
-        Returns:
-            List of tiles.
-        """
-        return self.controller.tiles.copy()
+            logger.info(f"Removed tile {tile.id}")
     
     def paintEvent(self, event) -> None:
-        """Paint the grid overlay in edit mode.
-        
-        Args:
-            event: Paint event.
-        """
+        """Paint the grid."""
         super().paintEvent(event)
         
-        if not self.is_edit_mode:
+        if not self.edit_mode:
             return
         
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         
         # Draw grid lines
-        pen = QPen(QColor("#E0E0E0"))
-        pen.setWidth(1)
+        pen = QPen(QColor(200, 200, 200))
         pen.setStyle(Qt.PenStyle.DashLine)
         painter.setPen(pen)
         
         # Vertical lines
-        for col in range(1, self.GRID_COLS):
+        for col in range(self.GRID_COLS + 1):
             x = col * self.cell_size
             painter.drawLine(x, 0, x, self.height())
         
         # Horizontal lines
-        for row in range(1, self.GRID_ROWS):
+        for row in range(self.GRID_ROWS + 1):
             y = row * self.cell_size
             painter.drawLine(0, y, self.width(), y)
         
-        # Draw grid border
-        pen.setStyle(Qt.PenStyle.SolidLine)
-        pen.setColor(QColor("#BDBDBD"))
-        pen.setWidth(2)
-        painter.setPen(pen)
-        painter.drawRect(0, 0, self.width() - 1, self.height() - 1)
+        painter.end()
     
-    def resizeEvent(self, event) -> None:
-        """Handle resize to maintain square cells.
+    def contextMenuEvent(self, event) -> None:
+        """Handle right-click context menu.
         
         Args:
-            event: Resize event.
+            event: Context menu event.
         """
-        super().resizeEvent(event)
+        if not self.edit_mode:
+            return
         
-        # Calculate cell size to fit
-        available_width = self.width()
-        available_height = self.height()
+        # Find which tile was clicked
+        pos = event.pos()
+        clicked_tile = None
         
-        cell_width = available_width / self.GRID_COLS
-        cell_height = available_height / self.GRID_ROWS
+        for tile_id, tile_widget in self.tile_widgets.items():
+            if tile_widget.geometry().contains(pos):
+                clicked_tile = tile_widget.tile
+                break
         
-        # Use smaller dimension to keep cells square
-        self.cell_size = max(self.MIN_CELL_SIZE, min(cell_width, cell_height))
+        if not clicked_tile:
+            return
         
-        # Update all tile geometries
-        for widget in self.tile_widgets.values():
-            widget.cell_size = self.cell_size
-            widget.update_geometry()
+        # Show settings dialog
+        self._show_tile_settings(clicked_tile)
+    
+    def _show_tile_settings(self, tile: Tile) -> None:
+        """Show settings dialog for a tile.
+        
+        Args:
+            tile: The tile to configure.
+        """
+        # Get plugin metadata
+        metadata = None
+        if hasattr(self.parent(), 'plugin_loader'):
+            metadata = self.parent().plugin_loader.get_metadata(tile.plugin_id)
+        
+        if not metadata or not metadata.schema_path:
+            QMessageBox.information(
+                self,
+                "No Settings",
+                f"The '{tile.plugin_id}' plugin has no configurable settings."
+            )
+            return
+        
+        # Show settings dialog
+        dialog = SettingsDialog(
+            title=f"{metadata.name} Settings",
+            schema_path=metadata.schema_path,
+            current_values=tile.state,
+            parent=self
+        )
+        
+        if dialog.exec():
+            new_settings = dialog.get_values()
+            
+            # Update tile state
+            tile.state = new_settings
+            
+            # Update plugin instance
+            if hasattr(self.parent(), 'plugin_loader'):
+                self.parent().plugin_loader.update_instance(
+                    tile.instance_id,
+                    new_settings
+                )
+            
+            # Save to database
+            if hasattr(self.parent(), 'repository'):
+                self.parent().repository.update_tile(tile)
+            
+            logger.info(f"Updated settings for tile {tile.id}")
+    
+    def sizeHint(self) -> QSize:
+        """Get the recommended size for the grid.
+        
+        Returns:
+            Recommended size.
+        """
+        return QSize(
+            self.GRID_COLS * self.cell_size,
+            self.GRID_ROWS * self.cell_size
+        )
+    

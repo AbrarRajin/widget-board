@@ -1,0 +1,19 @@
+{
+  "plugin_id": "clock_widget",
+  "name": "Clock",
+  "version": "1.0.0",
+  "description": "A digital clock widget with customizable display options",
+  "author": "WidgetBoard Team",
+  "module_path": "examples.clock_widget.clock_plugin",
+  "class_name": "ClockPlugin",
+  "execution_mode": "out_of_process",
+  "worker_script": "examples/clock_widget/worker.py",
+  "schema_path": "schema/clock_widget_settings.json",
+  "icon_path": null,
+  "min_width": 2,
+  "min_height": 1,
+  "max_width": 4,
+  "max_height": 2,
+  "default_width": 2,
+  "default_height": 1
+}
