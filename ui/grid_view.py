@@ -1,15 +1,18 @@
-"""Grid view - displays the 8×8 tile grid with plugin rendering support."""
-
+"""Grid view for displaying and managing widget tiles."""
+from typing import Optional, Dict, List, Tuple
+from PySide6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
+    QFrame, QScrollArea, QPushButton
+)
+from PySide6.QtCore import Qt, Signal, QPoint, QRect, QSize, QTimer
+from PySide6.QtGui import QPainter, QColor, QPen, QBrush
 import logging
-from typing import Dict, Optional
-from PySide6.QtWidgets import QWidget, QMessageBox
-from PySide6.QtCore import Qt, Signal, QPoint, QRect, QSize
-from PySide6.QtGui import QPainter, QColor, QPen
 
-from core.models import Tile
 from core.grid_controller import GridController
+from core.models import Tile, Page  # Correct names
+from core.plugin_loader import PluginLoader
 from ui.tile_widget import TileWidget
-from ui.settings_dialog import SettingsDialog
+from ui.status_indicator import TileStatus
 
 logger = logging.getLogger(__name__)
 
@@ -175,39 +178,50 @@ class GridView(QWidget):
 
 
     
-    def _create_tile_widget(self, tile: Tile) -> TileWidget:
-        """Create a visual widget for a tile.
-        
-        Args:
-            tile: The tile model.
-        
-        Returns:
-            TileWidget instance.
-        """
-        # Get plugin instance if exists
-        plugin = None
-        if hasattr(self.parent(), 'plugin_loader'):
-            plugin = self.parent().plugin_loader.get_instance(tile.instance_id)
-        
-        # Create tile widget with plugin
-        tile_widget = TileWidget(tile, self.cell_size, self, plugin)
-        tile_widget.set_edit_mode(self.edit_mode)
-        
-        # Connect signals
-        tile_widget.move_requested.connect(
-            lambda r, c, t=tile: self._handle_move_request(t, r, c)
-        )
-        tile_widget.resize_requested.connect(
-            lambda w, h, t=tile: self._handle_resize_request(t, w, h)
-        )
-        tile_widget.remove_requested.connect(
-            lambda t=tile: self._handle_remove_request(t)
-        )
-        
-
-
-        
-        return tile_widget
+    def _create_tile_widget(self, tile: Tile) -> Optional[TileWidget]:
+        """Create a tile widget for the given tile model."""
+        try:
+            logger.info(f"Creating widget for tile {tile.id}: {tile.plugin_id} at ({tile.row}, {tile.col})")
+            
+            # Get plugin instance
+            plugin = self.plugin_loader.get_instance(tile.instance_id)
+            
+            if not plugin:
+                logger.warning(f"No plugin instance found for {tile.instance_id}")
+                return None
+            
+            # Create tile widget (handles both old and new signatures)
+            tile_widget = TileWidget(tile, self.cell_size, self, plugin)
+            
+            # Connect signals
+            tile_widget.settings_requested.connect(
+                lambda tid=tile.id: self._on_tile_settings_requested(tid)
+            )
+            tile_widget.remove_requested.connect(
+                lambda tid=tile.id: self._on_tile_remove_requested(tid)
+            )
+            
+            # Request initial data from plugin
+            try:
+                tile_widget.set_status(TileStatus.UPDATING)
+                response = plugin.update("resume")
+                
+                if response.get("status") == "ok" and "data" in response:
+                    tile_widget.set_data(response["data"])
+                else:
+                    error_msg = response.get("error", "Failed to load")
+                    logger.warning(f"Plugin returned error: {error_msg}")
+                    tile_widget.set_status(TileStatus.ERROR, error_msg)
+                    
+            except Exception as e:
+                logger.error(f"Error getting initial data: {e}")
+                tile_widget.set_status(TileStatus.ERROR, "Load failed")
+            
+            return tile_widget
+            
+        except Exception as e:
+            logger.error(f"Error creating tile widget for {tile.id}: {e}", exc_info=True)
+            return None
     
     def _handle_move_request(self, tile: Tile, new_row: int, new_col: int) -> None:
         """Handle tile move request.
@@ -392,3 +406,61 @@ class GridView(QWidget):
             self.GRID_ROWS * self.cell_size
         )
     
+    def _create_tile_widget(self, tile: Tile) -> Optional[TileWidget]:
+        """Create a tile widget for the given tile model."""
+        try:
+            logger.info(f"Creating widget for tile {tile.id}: {tile.plugin_id} at ({tile.row}, {tile.col})")
+            
+            # Get plugin instance - check if plugin_loader exists
+            plugin = None
+            if hasattr(self, 'plugin_loader'):
+                plugin = self.plugin_loader.get_instance(tile.instance_id)
+            elif hasattr(self, '_plugin_loader'):
+                plugin = self._plugin_loader.get_instance(tile.instance_id)
+            else:
+                # Try to get from parent (main_window)
+                parent = self.parent()
+                while parent:
+                    if hasattr(parent, 'plugin_loader'):
+                        plugin = parent.plugin_loader.get_instance(tile.instance_id)
+                        break
+                    parent = parent.parent()
+            
+            if not plugin:
+                logger.warning(f"No plugin instance found for {tile.instance_id}")
+                return None
+            
+            # Create tile widget (handles both old and new signatures)
+            tile_widget = TileWidget(tile, self.cell_size, self, plugin)
+            
+            # Connect signals if methods exist
+            if hasattr(self, '_on_tile_settings_requested'):
+                tile_widget.settings_requested.connect(
+                    lambda tid=tile.id: self._on_tile_settings_requested(tid)
+                )
+            if hasattr(self, '_on_tile_remove_requested'):
+                tile_widget.remove_requested.connect(
+                    lambda tid=tile.id: self._on_tile_remove_requested(tid)
+                )
+            
+            # Request initial data from plugin
+            try:
+                tile_widget.set_status(TileStatus.UPDATING)
+                response = plugin.update("resume")
+                
+                if response.get("status") == "ok" and "data" in response:
+                    tile_widget.set_data(response["data"])
+                else:
+                    error_msg = response.get("error", "Failed to load")
+                    logger.warning(f"Plugin returned error: {error_msg}")
+                    tile_widget.set_status(TileStatus.ERROR, error_msg)
+                    
+            except Exception as e:
+                logger.error(f"Error getting initial data: {e}")
+                tile_widget.set_status(TileStatus.ERROR, "Load failed")
+            
+            return tile_widget
+            
+        except Exception as e:
+            logger.error(f"Error creating tile widget for {tile.id}: {e}", exc_info=True)
+            return None

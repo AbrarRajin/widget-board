@@ -1,396 +1,357 @@
-"""Visual widget for displaying tiles with plugin support."""
-
+"""Tile widget with chrome (titlebar, status, menu) and content area."""
+from typing import Optional, Dict, Any
+from PySide6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QPushButton
+)
+from PySide6.QtCore import Qt, Signal, QPoint, QRect, QTimer
+from PySide6.QtGui import QPainter, QColor, QPen
 import logging
-from typing import Optional
-from PySide6.QtWidgets import QWidget, QLabel, QVBoxLayout, QTextEdit
-from PySide6.QtCore import Qt, Signal, QRect, QPoint, QTimer
-from PySide6.QtGui import QPainter, QColor, QPen, QFont
 
-from core.models import Tile
-from core.plugin_api import WidgetPlugin  # Changed from PluginBase to WidgetPlugin
+from ui.status_indicator import StatusIndicator, TileStatus
+from ui.tile_menu import TileMenu
+from ui.data_renderers import DataRenderer
 
 logger = logging.getLogger(__name__)
 
 
-class TileWidget(QWidget):
-    """Visual representation of a grid tile with plugin rendering support."""
+class TileWidget(QFrame):
+    """
+    Complete tile widget with chrome and content.
+    
+    Structure:
+    - Title bar (drag handle, title, status, menu)
+    - Content area (rendered from plugin data)
+    - Resize handles (in edit mode)
+    
+    Compatible with both old (M1-M4) and new (M5) initialization.
+    """
     
     # Signals
-    move_requested = Signal(int, int)  # row, col
-    resize_requested = Signal(int, int)  # width, height
+    drag_started = Signal(QPoint)
+    settings_requested = Signal()
+    refresh_requested = Signal()
     remove_requested = Signal()
+    duplicate_requested = Signal()
+    resize_started = Signal(QPoint)
     
-    # Visual constants
-    RESIZE_HANDLE_SIZE = 12
-    BORDER_WIDTH = 2
-    
-    def __init__(
-        self,
-        tile: Tile,
-        cell_size: int,
-        parent: Optional[QWidget] = None,
-        plugin: Optional[WidgetPlugin] = None  # Changed from PluginBase
-    ) -> None:
-        """Initialize tile widget.
-        
-        Args:
-            tile: The tile data model
-            cell_size: Size of one grid cell in pixels
-            parent: Parent widget
-            plugin: Optional plugin instance to render in the tile
+    def __init__(self, *args, **kwargs):
         """
-        super().__init__(parent)
+        Flexible constructor supporting both signatures:
+        - New: TileWidget(instance_id: str, plugin_name: str, parent: QWidget)
+        - Old: TileWidget(tile: TileModel, cell_size: int, parent: QWidget, plugin: PluginProxy)
+        """
+        # Parse arguments
+        if len(args) >= 2 and isinstance(args[1], int):
+            # Old signature: (tile, cell_size, parent, plugin)
+            tile = args[0]
+            cell_size = args[1]
+            parent = args[2] if len(args) > 2 else kwargs.get('parent')
+            plugin = args[3] if len(args) > 3 else kwargs.get('plugin')
+            
+            super().__init__(parent)
+            
+            self.tile = tile
+            self.instance_id = tile.instance_id
+            self.plugin_name = tile.plugin_id  # Use plugin_id from tile
+            self.plugin = plugin
+            self.cell_size = cell_size
+            
+            # Get actual plugin name if plugin proxy is available
+            if plugin and hasattr(plugin, 'manifest'):
+                self.plugin_name = plugin.manifest.get('name', tile.plugin_id)
+        else:
+            # New signature: (instance_id, plugin_name, parent)
+            instance_id = args[0] if len(args) > 0 else kwargs.get('instance_id')
+            plugin_name = args[1] if len(args) > 1 else kwargs.get('plugin_name')
+            parent = args[2] if len(args) > 2 else kwargs.get('parent')
+            
+            super().__init__(parent)
+            
+            self.instance_id = instance_id
+            self.plugin_name = plugin_name
+            self.tile = None
+            self.plugin = None
+            self.cell_size = 100  # Default
         
-        self.tile = tile
-        self.cell_size = cell_size
-        self.plugin = plugin
-        self.is_edit_mode = False
-        self.is_dragging = False
-        self.is_resizing = False
-        self.drag_start_pos = QPoint()
-        self.start_geometry = QRect()
-        self.content_widget = None
-        
-        # Update timer for plugins that need periodic updates
-        self.update_timer = QTimer(self)
-        self.update_timer.timeout.connect(self._on_update_timer)
-        self.last_update_time = 0
+        self._edit_mode = False
+        self._is_dragging = False
+        self._is_resizing = False
+        self._drag_start_pos: Optional[QPoint] = None
+        self._resize_start_pos: Optional[QPoint] = None
         
         self._setup_ui()
-        self.update_geometry()
+        self._apply_style()
         
-        # Connect to plugin signals if available
-        if self.plugin:
-            self.plugin.render_updated.connect(self._refresh_content)
+        # Auto-refresh timer for plugin updates
+        self._refresh_timer = QTimer(self)
+        self._refresh_timer.timeout.connect(self._auto_refresh)
+        
+    def set_plugin(self, plugin) -> None:
+        """Set plugin proxy (for compatibility with grid_view)."""
+        self.plugin = plugin
+        if plugin and hasattr(plugin, 'manifest'):
+            self.plugin_name = plugin.manifest.get('name', self.plugin_name)
+            self._title_label.setText(self.plugin_name)
+            
+            # Start auto-refresh if plugin has refresh cadence
+            cadence = plugin.manifest.get('refresh_cadence_ms', 0)
+            if cadence > 0:
+                self._refresh_timer.start(cadence)
     
     def _setup_ui(self) -> None:
-        """Set up the widget UI."""
-        # Widget properties
-        self.setMouseTracking(True)
-        self.setAttribute(Qt.WidgetAttribute.WA_Hover)
+        """Build the tile UI structure."""
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
         
-        # Layout
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
+        # Title bar
+        self._title_bar = QWidget()
+        self._title_bar.setFixedHeight(36)
+        title_layout = QHBoxLayout(self._title_bar)
+        title_layout.setContentsMargins(12, 6, 8, 6)
+        title_layout.setSpacing(8)
         
-        # Create content widget
-        self._create_content_widget(layout)
+        # Drag handle (visible in edit mode)
+        self._drag_handle = QLabel("⋮⋮")
+        self._drag_handle.setFixedSize(16, 24)
+        self._drag_handle.setStyleSheet("color: #999; font-weight: bold;")
+        self._drag_handle.setVisible(False)
+        title_layout.addWidget(self._drag_handle)
         
-        # Apply initial style
-        self._update_style()
+        # Title
+        self._title_label = QLabel(self.plugin_name)
+        self._title_label.setStyleSheet("font-weight: 600; font-size: 13px;")
+        title_layout.addWidget(self._title_label, 1)
+        
+        # Status indicator
+        self._status_indicator = StatusIndicator()
+        title_layout.addWidget(self._status_indicator)
+        
+        # Menu
+        self._menu = TileMenu()
+        self._menu.settings_requested.connect(self.settings_requested.emit)
+        self._menu.refresh_requested.connect(self._on_refresh_requested)
+        self._menu.remove_requested.connect(self.remove_requested.emit)
+        self._menu.duplicate_requested.connect(self.duplicate_requested.emit)
+        title_layout.addWidget(self._menu)
+        
+        main_layout.addWidget(self._title_bar)
+        
+        # Separator
+        separator = QFrame()
+        separator.setFrameShape(QFrame.Shape.HLine)
+        separator.setStyleSheet("background: #e0e0e0;")
+        separator.setFixedHeight(1)
+        main_layout.addWidget(separator)
+        
+        # Content area
+        self._content_container = QWidget()
+        self._content_layout = QVBoxLayout(self._content_container)
+        self._content_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.addWidget(self._content_container, 1)
+        
+        # Initial status
+        self._set_placeholder()
+        self.set_status(TileStatus.STARTING, "Initializing")
     
-    def _create_content_widget(self, layout: QVBoxLayout) -> None:
-        """Create the content widget based on plugin availability.
-        print(f"DEBUG: Creating content for tile {self.tile.instance_id}")
-        print(f"  Plugin: {self.plugin}")
-        print(f"  Plugin ID: {self.tile.plugin_id}")
+    def _apply_style(self) -> None:
+        """Apply styling to the tile."""
+        self.setFrameShape(QFrame.Shape.StyledPanel)
+        self.setStyleSheet("""
+            TileWidget {
+                background: white;
+                border: 1px solid #e0e0e0;
+                border-radius: 8px;
+            }
+            TileWidget:hover {
+                border: 1px solid #bdbdbd;
+            }
+        """)
+    
+    def set_edit_mode(self, enabled: bool) -> None:
+        """Toggle edit mode (show drag handle, enable dragging)."""
+        self._edit_mode = enabled
+        self._drag_handle.setVisible(enabled)
         
-        Args:
-            layout: The layout to add content to
-        """
-        # Check if we have a plugin to render
-        if self.plugin:
-            print(f"  Plugin state: {self.plugin.state}")
-            try:
-                # Get render data from plugin
-                render_data = self.plugin.get_render_data()
-                print(f"  Render data: {render_data}")
-                
-                if "html" in render_data:
-                    # Create HTML display widget
-                    self.content_widget = QTextEdit()
-                    self.content_widget.setReadOnly(True)
-                    self.content_widget.setFrameStyle(0)
-                    self.content_widget.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-                    self.content_widget.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-                    self.content_widget.setHtml(render_data["html"])
-                    layout.addWidget(self.content_widget, 1)
-                    
-                    # Start update timer if plugin needs updates
-                    if render_data.get("needs_update", False):
-                        self.update_timer.start(16)  # ~60 FPS
-                else:
-                    # No HTML, show placeholder
-                    self._create_placeholder_content(layout)
-                    
-            except Exception as e:
-                logger.error(f"Error getting render data from plugin: {e}", exc_info=True)
-                # Show error message in tile
-                error_label = QLabel(f"Plugin Error:\n{str(e)}")
-                error_label.setStyleSheet("color: red;")
-                error_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                layout.addWidget(error_label)
+        if enabled:
+            self._title_bar.setCursor(Qt.CursorShape.OpenHandCursor)
         else:
-            # No plugin - show placeholder content
-            self._create_placeholder_content(layout)
+            self._title_bar.setCursor(Qt.CursorShape.ArrowCursor)
     
-    def _create_placeholder_content(self, layout: QVBoxLayout) -> None:
-        """Create placeholder content when no plugin is available.
-        
-        Args:
-            layout: The layout to add content to
+    def set_status(self, status: TileStatus, message: str = "") -> None:
+        """Update tile status indicator."""
+        self._status_indicator.set_status(status, message)
+    
+    def set_data(self, data: Dict[str, Any]) -> None:
         """
-        # Title label
-        self.title_label = QLabel(self.tile.plugin_id or "Empty Tile")
-        self.title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        font = QFont()
-        font.setBold(True)
-        font.setPointSize(10)
-        self.title_label.setFont(font)
+        Update tile content from plugin data.
         
-        # Info label
-        self.info_label = QLabel(f"{self.tile.width}×{self.tile.height}")
-        self.info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.info_label.setStyleSheet("color: #666;")
-        
-        layout.addStretch()
-        layout.addWidget(self.title_label)
-        layout.addWidget(self.info_label)
-        layout.addStretch()
-    
-    def _on_update_timer(self) -> None:
-        """Handle update timer tick."""
-        if not self.plugin:
-            self.update_timer.stop()
-            return
-        
-        # Calculate delta time
-        import time
-        current_time = time.time()
-        if self.last_update_time == 0:
-            delta_time = 0.016  # ~60 FPS
-        else:
-            delta_time = current_time - self.last_update_time
-        self.last_update_time = current_time
-        
-        # Update plugin
-        try:
-            self.plugin.update(delta_time)
-        except Exception as e:
-            logger.error(f"Error updating plugin: {e}")
-    
-    def _refresh_content(self) -> None:
-        """Refresh the content from the plugin."""
-        if not self.plugin or not self.content_widget:
-            return
-        
-        try:
-            render_data = self.plugin.get_render_data()
-            if "html" in render_data and isinstance(self.content_widget, QTextEdit):
-                self.content_widget.setHtml(render_data["html"])
-        except Exception as e:
-            logger.error(f"Error refreshing content: {e}")
-    
-    def set_plugin(self, plugin: Optional[WidgetPlugin]) -> None:
-        """Set or update the plugin for this tile.
-        
-        Args:
-            plugin: New plugin instance, or None to clear
+        Expected data format:
+        {
+            "layout": "text" | "metric" | "list" | "key_value" | "header_body",
+            "content": {...}
+        }
         """
-        # Disconnect old plugin signals
-        if self.plugin:
-            try:
-                self.plugin.render_updated.disconnect(self._refresh_content)
-            except:
-                pass
-        
-        self.plugin = plugin
-        
-        # Connect new plugin signals
-        if self.plugin:
-            self.plugin.render_updated.connect(self._refresh_content)
-        
-        # Rebuild the UI
-        self._clear_layout()
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-        self._create_content_widget(layout)
-        self._update_style()
-    
-    def _clear_layout(self) -> None:
-        """Clear all widgets from the layout."""
-        # Stop update timer
-        self.update_timer.stop()
-        
-        # Clear layout
-        if self.layout():
-            while self.layout().count():
-                item = self.layout().takeAt(0)
+        try:
+            # Remove old content
+            while self._content_layout.count():
+                item = self._content_layout.takeAt(0)
                 if item.widget():
                     item.widget().deleteLater()
             
-            # Delete the layout itself
-            self.layout().deleteLater()
+            # Render new content
+            content_widget = DataRenderer.render(data, self._content_container)
+            self._content_layout.addWidget(content_widget)
+            
+            # Update status to OK
+            self.set_status(TileStatus.OK)
+            
+            logger.debug(f"Rendered data for {self.instance_id}: {data.get('layout', 'unknown')}")
+            
+        except Exception as e:
+            logger.error(f"Error rendering data for {self.instance_id}: {e}")
+            self._set_error(str(e))
+            self.set_status(TileStatus.ERROR, "Render failed")
     
-    def set_edit_mode(self, enabled: bool) -> None:
-        """Set edit mode on or off.
+    def _set_placeholder(self) -> None:
+        """Show placeholder content."""
+        while self._content_layout.count():
+            item = self._content_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
         
-        Args:
-            enabled: True to enable edit mode
-        """
-        self.is_edit_mode = enabled
-        self._update_style()
-        self.update()
+        placeholder = QLabel("Loading...")
+        placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        placeholder.setStyleSheet("color: #999;")
+        self._content_layout.addWidget(placeholder)
     
-    def update_geometry(self) -> None:
-        """Update widget geometry based on tile position and size."""
-        x = self.tile.col * self.cell_size
-        y = self.tile.row * self.cell_size
-        width = self.tile.width * self.cell_size
-        height = self.tile.height * self.cell_size
+    def _set_error(self, message: str) -> None:
+        """Show error message in content area."""
+        while self._content_layout.count():
+            item = self._content_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
         
-        self.setGeometry(x, y, width, height)
+        error_label = QLabel(f"⚠ Error\n{message}")
+        error_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        error_label.setWordWrap(True)
+        error_label.setStyleSheet("color: #F44336; padding: 20px;")
+        self._content_layout.addWidget(error_label)
     
-    def _update_style(self) -> None:
-        """Update widget styling based on state."""
-        if self.is_edit_mode:
-            self.setStyleSheet("""
-                TileWidget {
-                    background-color: white;
-                    border: 2px solid #2196F3;
-                    border-radius: 4px;
-                }
-                TileWidget:hover {
-                    border-color: #1976D2;
-                }
-            """)
-        else:
-            self.setStyleSheet("""
-                TileWidget {
-                    background-color: white;
-                    border: 1px solid #ddd;
-                    border-radius: 4px;
-                }
-            """)
+    def _auto_refresh(self) -> None:
+        """Auto-refresh from plugin."""
+        if self.plugin:
+            try:
+                self.set_status(TileStatus.UPDATING)
+                response = self.plugin.update("timer")
+                
+                if response.get("status") == "ok" and "data" in response:
+                    self.set_data(response["data"])
+                else:
+                    error_msg = response.get("error", "Unknown error")
+                    self._set_error(error_msg)
+                    self.set_status(TileStatus.ERROR, error_msg)
+            except Exception as e:
+                logger.error(f"Auto-refresh failed for {self.instance_id}: {e}")
+                self._set_error(str(e))
+                self.set_status(TileStatus.ERROR, "Update failed")
     
-    def paintEvent(self, event):
-        """Paint the widget."""
+    def _on_refresh_requested(self) -> None:
+        """Handle manual refresh request."""
+        self.refresh_requested.emit()
+        if self.plugin:
+            self._auto_refresh()
+    
+    def refresh_from_plugin(self) -> None:
+        """Force refresh from plugin (called externally)."""
+        self._auto_refresh()
+    
+    def mousePressEvent(self, event) -> None:
+        """Handle mouse press for dragging and resizing."""
+        if event.button() == Qt.MouseButton.LeftButton:
+            # Check for resize handle
+            if self._edit_mode and self._is_over_resize_handle(event.pos()):
+                self._is_resizing = True
+                self._resize_start_pos = event.pos()
+                self.setCursor(Qt.CursorShape.SizeFDiagCursor)
+                self.resize_started.emit(event.globalPosition().toPoint())
+                event.accept()
+                return
+            
+            # Check for drag in title bar
+            if self._edit_mode and self._title_bar.geometry().contains(event.pos()):
+                self._is_dragging = True
+                self._drag_start_pos = event.pos()
+                self._title_bar.setCursor(Qt.CursorShape.ClosedHandCursor)
+                self.drag_started.emit(event.globalPosition().toPoint())
+                event.accept()
+                return
+        
+        super().mousePressEvent(event)
+    
+    def mouseReleaseEvent(self, event) -> None:
+        """Handle mouse release."""
+        if self._is_dragging:
+            self._is_dragging = False
+            self._drag_start_pos = None
+            if self._edit_mode:
+                self._title_bar.setCursor(Qt.CursorShape.OpenHandCursor)
+            event.accept()
+            return
+        
+        if self._is_resizing:
+            self._is_resizing = False
+            self._resize_start_pos = None
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+            event.accept()
+            return
+        
+        super().mouseReleaseEvent(event)
+    
+    def mouseMoveEvent(self, event) -> None:
+        """Handle mouse move for resize handle cursor."""
+        if self._edit_mode and self._is_over_resize_handle(event.pos()):
+            self.setCursor(Qt.CursorShape.SizeFDiagCursor)
+        elif not self._is_resizing:
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+        
+        super().mouseMoveEvent(event)
+    
+    def _is_over_resize_handle(self, pos: QPoint) -> bool:
+        """Check if position is over the resize handle."""
+        handle_size = 16
+        handle_rect = QRect(
+            self.width() - handle_size,
+            self.height() - handle_size,
+            handle_size,
+            handle_size
+        )
+        return handle_rect.contains(pos)
+    
+    def paintEvent(self, event) -> None:
+        """Custom paint for selection/hover effects."""
         super().paintEvent(event)
         
-        # Draw resize handle in edit mode
-        if self.is_edit_mode:
+        # Draw resize handles in edit mode
+        if self._edit_mode:
             painter = QPainter(self)
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
             
-            # Resize handle
-            handle_rect = self._get_resize_handle_rect()
-            painter.fillRect(handle_rect, QColor("#2196F3"))
+            # Bottom-right corner handle
+            handle_size = 12
+            handle_rect = QRect(
+                self.width() - handle_size - 4,
+                self.height() - handle_size - 4,
+                handle_size,
+                handle_size
+            )
             
-            # Draw grip lines
-            painter.setPen(QPen(QColor("white"), 2))
-            grip_offset = 3
+            painter.setPen(QPen(QColor("#999"), 2))
             painter.drawLine(
-                handle_rect.right() - grip_offset,
-                handle_rect.bottom() - grip_offset - 6,
-                handle_rect.right() - grip_offset,
-                handle_rect.bottom() - grip_offset
+                handle_rect.topRight(),
+                handle_rect.bottomLeft()
             )
             painter.drawLine(
-                handle_rect.right() - grip_offset - 6,
-                handle_rect.bottom() - grip_offset,
-                handle_rect.right() - grip_offset,
-                handle_rect.bottom() - grip_offset
+                handle_rect.topRight() + QPoint(-4, 4),
+                handle_rect.bottomLeft() + QPoint(-4, 4)
             )
-    
-    def _get_resize_handle_rect(self) -> QRect:
-        """Get the resize handle rectangle."""
-        return QRect(
-            self.width() - self.RESIZE_HANDLE_SIZE,
-            self.height() - self.RESIZE_HANDLE_SIZE,
-            self.RESIZE_HANDLE_SIZE,
-            self.RESIZE_HANDLE_SIZE
-        )
-    
-    def mousePressEvent(self, event):
-        """Handle mouse press."""
-        if not self.is_edit_mode:
-            return
-        
-        if event.button() == Qt.MouseButton.LeftButton:
-            # Check if clicking resize handle
-            if self._get_resize_handle_rect().contains(event.pos()):
-                self.is_resizing = True
-                self.drag_start_pos = event.pos()
-                self.resize_start_width = self.tile.width
-                self.resize_start_height = self.tile.height
-                self.setCursor(Qt.CursorShape.SizeFDiagCursor)
-                event.accept()
-            else:
-                self.is_dragging = True
-                self.drag_start_pos = event.pos()
-                self.setCursor(Qt.CursorShape.ClosedHandCursor)
-                event.accept()
-    
-    def mouseMoveEvent(self, event):
-        """Handle mouse move."""
-        if not self.is_edit_mode:
-            return
-        
-        # Update cursor based on position
-        if not self.is_dragging and not self.is_resizing:
-            if self._get_resize_handle_rect().contains(event.pos()):
-                self.setCursor(Qt.CursorShape.SizeFDiagCursor)
-            else:
-                self.setCursor(Qt.CursorShape.OpenHandCursor)
-        
-        # Handle dragging
-        if self.is_dragging:
-            delta = event.pos() - self.drag_start_pos
-            new_x = self.x() + delta.x()
-            new_y = self.y() + delta.y()
-            
-            # Snap to grid
-            new_col = round(new_x / self.cell_size)
-            new_row = round(new_y / self.cell_size)
-            
-            # Clamp to grid bounds
-            new_col = max(0, min(7 - self.tile.width + 1, new_col))
-            new_row = max(0, min(7 - self.tile.height + 1, new_row))
-            
-            if new_col != self.tile.col or new_row != self.tile.row:
-                self.move_requested.emit(new_row, new_col)
-        
-        # Handle resizing - FIXED VERSION
-        elif self.is_resizing:
-            # Calculate total delta from start of resize
-            delta = event.pos() - self.drag_start_pos
-            
-            # Calculate how many cells we've moved (using larger threshold for better feel)
-            cells_x = round(delta.x() / self.cell_size)
-            cells_y = round(delta.y() / self.cell_size)
-            
-            # Calculate new size
-            new_width = self.resize_start_width + cells_x
-            new_height = self.resize_start_height + cells_y
-            
-            # Clamp to valid range (minimum 1, maximum to grid edge)
-            max_width = 8 - self.tile.col
-            max_height = 8 - self.tile.row
-            new_width = max(1, min(max_width, new_width))
-            new_height = max(1, min(max_height, new_height))
-            
-            # Only emit if size actually changed
-            if new_width != self.tile.width or new_height != self.tile.height:
-                self.resize_requested.emit(new_width, new_height)
-    
-    def mouseReleaseEvent(self, event):
-        """Handle mouse release."""
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.is_dragging = False
-            self.is_resizing = False
-            self.setCursor(Qt.CursorShape.OpenHandCursor)
-            event.accept()
-    
-    def closeEvent(self, event):
-        """Handle widget close event."""
-        # Stop update timer
-        self.update_timer.stop()
-        
-        # Disconnect plugin signals
-        if self.plugin:
-            try:
-                self.plugin.render_updated.disconnect(self._refresh_content)
-            except:
-                pass
-        
-        super().closeEvent(event)
