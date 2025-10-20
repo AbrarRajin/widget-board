@@ -40,4 +40,15 @@
 - [x] Plugin menu with discovered plugins
 - [x] Per-instance plugin settings
 
-### Next: M4 - Out-of-Process Plugin Isolation
+### Next: M4 - Out-of-Process Isolation (ZeroMQ)
+- [x] PluginSupervisor (spawn, restart with backoff, quarantine after N failures).
+- [x] IpcBroker (REQ/REP commands; PUB/SUB updates).
+- [x] Heartbeat and liveness checks.
+- [x] Host permission broker (net/files/clipboard) with audited calls.
+- [x] Replace M3 prototype with real process isolation.
+- [x] Acceptance: A crashed plugin cannot freeze the UI; auto-restart works; host enforces permissions.
+
+### M5 — Data-First Rendering & Status Chrome
+- [x] Tile chrome: titlebar, drag handle, status pill (ok/error/updating), overflow menu (settings/refresh/remove).
+- [x] Data-to-UI mapping for standard card layouts.
+- [x] Throttling/coalescing of updates per page.
